@@ -52,15 +52,9 @@ async function loadKeys() {
           Redeemed: <span style="color:white; font-weight:600;">${new Date(k.redeemed_at).toLocaleDateString()}</span>
         </p>
         
-        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px; margin-bottom:1rem; transform: translateZ(50px);">
-          <button class="btn btn-primary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'pc', this)">
-            🖥️ PC / TV
-          </button>
-          <button class="btn btn-secondary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'ios', this)">
-            🍏 Apple iOS
-          </button>
-          <button class="btn btn-secondary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'android', this)">
-            🤖 Android
+        <div style="margin-bottom:1rem; transform: translateZ(50px);">
+          <button class="btn btn-primary" style="width:100%; padding:0.75rem; font-size:0.9rem; font-weight:700; display:flex; align-items:center; justify-content:center; gap:8px; box-shadow: 0 4px 15px rgba(229,9,20,0.4);" onclick="generateLink(${k.id}, this)">
+            ⚡ GENERA LINK NETFLIX
           </button>
         </div>
         
@@ -97,11 +91,11 @@ window.toggleKey = function(id, fullKey) {
   }
 }
 
-window.generateLink = async function(id, type, btnElem) {
+window.generateLink = async function(id, btnElem) {
   const originalHtml = btnElem ? btnElem.innerHTML : '';
   if (btnElem) {
     btnElem.disabled = true;
-    btnElem.innerHTML = '⏳ Generando...';
+    btnElem.innerHTML = '⏳ Generando Link...';
   }
   
   const linkContainer = document.getElementById(`link-container-${id}`);
@@ -114,17 +108,7 @@ window.generateLink = async function(id, type, btnElem) {
       return;
     }
     
-    let url = res.url;
-    let label = '🖥️ PC / SmartTV';
-    
-    if (type === 'ios') {
-      url = res.ios_url || res.url;
-      label = '🍏 Apple iOS';
-    } else if (type === 'android') {
-      url = res.android_url || res.url;
-      label = '🤖 Android';
-    }
-    
+    const url = res.url;
     if (!url) {
       showToast('Errore generazione link', 'error');
       return;
@@ -132,7 +116,7 @@ window.generateLink = async function(id, type, btnElem) {
     
     linkContainer.innerHTML = `
       <div style="font-size:0.75rem; color:var(--accent-gold); margin-bottom:6px; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
-        <span>✨ LINK FRESCO (${label})</span>
+        <span>✨ LINK NETFLIX (UNIVERSALE)</span>
         <span style="color:var(--text-muted); font-size:0.7rem;">Live Token</span>
       </div>
       <div style="background:rgba(0,0,0,0.5); padding:8px; border-radius:6px; font-family:monospace; font-size:0.8rem; word-break:break-all; margin-bottom:10px; border:1px solid rgba(255,255,255,0.05); color:#fff;">

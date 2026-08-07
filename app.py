@@ -420,17 +420,12 @@ def api_generate_link():
     if not token:
         return jsonify({"error": "I cookie collegati a questa key sono scaduti. Contatta l'assistenza per caricare nuovi cookie."}), 503
 
-    # URL-encode the token to avoid '+' becoming spaces in query strings
-    encoded_token = urllib.parse.quote(token, safe="")
-    
-    pc_url      = "https://www.netflix.com/youraccount?nftoken=" + encoded_token
-    ios_url     = "https://www.netflix.com/browse?nftoken=" + encoded_token
-    android_url = "https://www.netflix.com/unsupported?nftoken=" + encoded_token
+    universal_url = f"https://netflix.com/?nftoken={token}"
     
     return jsonify({
-        "url": pc_url,
-        "ios_url": ios_url,
-        "android_url": android_url,
+        "url": universal_url,
+        "ios_url": universal_url,
+        "android_url": universal_url,
         "token": token,
         "timestamp": datetime.utcnow().isoformat()
     })
