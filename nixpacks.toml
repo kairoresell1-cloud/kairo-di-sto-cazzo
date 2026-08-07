@@ -1,8 +1,0 @@
-[phases.setup]
-nixPkgs = ['python311']
-
-[phases.install]
-cmds = ['pip install --no-cache-dir -r nftoken_web/requirements.txt']
-
-[start]
-cmd = 'python nftoken_web/app.py'
