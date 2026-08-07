@@ -116,12 +116,10 @@ window.generateLink = async function(id, type, btnElem) {
     
     let url = res.url;
     let label = '🖥️ PC / SmartTV';
-    let isIOS = false;
     
     if (type === 'ios') {
       url = res.ios_url || res.url;
-      label = '🍏 Apple iOS (Safari Web)';
-      isIOS = true;
+      label = '🍏 Apple iOS';
     } else if (type === 'android') {
       url = res.android_url || res.url;
       label = '🤖 Android';
@@ -140,18 +138,13 @@ window.generateLink = async function(id, type, btnElem) {
       <div style="background:rgba(0,0,0,0.5); padding:8px; border-radius:6px; font-family:monospace; font-size:0.8rem; word-break:break-all; margin-bottom:10px; border:1px solid rgba(255,255,255,0.05); color:#fff;">
         ${url}
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="btn btn-primary" style="flex:1; min-width:120px; padding:0.5rem; font-size:0.8rem;" onclick="copyToClipboard('${url}')">
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-primary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="copyToClipboard('${url}')">
           📋 Copia Link
         </button>
-        <a href="${url}" target="_blank" class="btn btn-secondary" style="flex:1; min-width:120px; padding:0.5rem; font-size:0.8rem; text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center;">
+        <a href="${url}" target="_blank" class="btn btn-secondary" style="flex:1; padding:0.5rem; font-size:0.85rem; text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center;">
           🚀 Apri Subito
         </a>
-        ${isIOS && res.ios_app_url ? `
-          <a href="${res.ios_app_url}" target="_blank" class="btn btn-secondary" style="flex:100%; margin-top:4px; padding:0.45rem; font-size:0.75rem; text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center; border-color:rgba(255,215,0,0.4); color:var(--accent-gold);">
-            📱 Apri direttamente nell'App Netflix
-          </a>
-        ` : ''}
       </div>
     `;
     linkContainer.classList.remove('hidden');
