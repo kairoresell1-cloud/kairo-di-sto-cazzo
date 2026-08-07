@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KAIRO | Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/static/index.html" class="logo">KAIRO</a>
+    <div class="nav-links" id="navAuth">
+      <!-- Injected by JS -->
+    </div>
+  </nav>
+
+  <main class="container">
+    <h2 class="mb-2" id="welcomeMsg">Your Keys</h2>
+    <div id="keysGrid" class="grid">
+      <!-- Keys injected here -->
+    </div>
+    <div id="emptyState" class="hidden text-center mt-2">
+      <p class="mb-2" style="color: var(--text-muted)">No keys yet — redeem one on the homepage.</p>
+      <a href="/static/index.html" class="btn btn-primary">Redeem a Key</a>
+    </div>
+  </main>
+  
+  <div id="toast-container"></div>
+
+  <script src="/static/kairo.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/vanilla-tilt/1.8.0/vanilla-tilt.min.js"></script>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
