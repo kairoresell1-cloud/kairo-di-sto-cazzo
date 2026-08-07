@@ -35,9 +35,18 @@ app.config.update(
     SECRET_KEY           = os.getenv("SECRET_KEY", secrets.token_hex(32)),
     SQLALCHEMY_DATABASE_URI      = _db_url,
     SQLALCHEMY_TRACK_MODIFICATIONS = False,
+    SEND_FILE_MAX_AGE_DEFAULT    = 0,
     GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", ""),
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", ""),
 )
+
+@app.after_request
+def add_no_cache_headers(response):
+    if request.path.startswith("/static/") or request.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 db.init_app(app)
 
@@ -72,7 +81,7 @@ _QUERY_PARAMS = {
     "appVersion": "15.48.1",
     "config": '{"gamesInTrailersEnabled":"false","cdsMyListSortEnabled":"true","kidsBillboardEnabled":"true","billboardEnabled":"true","useCDSGalleryEnabled":"true","sharksEnabled":"true"}',
     "device_type": "NFAPPL-02-",
-    "esn": "NFAPPL-02-IPHONE8%3D1-PXA-02026U9VV5O8AUKEAEO8PUJETCGDD4PQRI9DEB3MDLEMD0EACM4CS78LMD334MN3MQ3NMJ8SU9O9MVGS6BJCURM1PH1MUTGDPF4S4200",
+    "esn": "NFAPPL-02-IPHONE8=1-PXA-02026U9VV5O8AUKEAEO8PUJETCGDD4PQRI9DEB3MDLEMD0EACM4CS78LMD334MN3MQ3NMJ8SU9O9MVGS6BJCURM1PH1MUTGDPF4S4200",
     "idiom": "phone", "iosVersion": "15.8.5", "isTablet": "false",
     "languages": "en-US", "locale": "en-US", "maxDeviceWidth": "375",
     "model": "saget", "modelType": "IPHONE8-1", "odpAware": "true",
@@ -415,14 +424,12 @@ def api_generate_link():
     encoded_token = urllib.parse.quote(token, safe="")
     
     pc_url      = "https://www.netflix.com/youraccount?nftoken=" + encoded_token
-    ios_url     = "https://www.netflix.com/youraccount?nftoken=" + encoded_token
-    ios_app_url = "https://www.netflix.com/browse?nftoken=" + encoded_token
+    ios_url     = "https://www.netflix.com/browse?nftoken=" + encoded_token
     android_url = "https://www.netflix.com/unsupported?nftoken=" + encoded_token
     
     return jsonify({
         "url": pc_url,
         "ios_url": ios_url,
-        "ios_app_url": ios_app_url,
         "android_url": android_url,
         "token": token,
         "timestamp": datetime.utcnow().isoformat()
