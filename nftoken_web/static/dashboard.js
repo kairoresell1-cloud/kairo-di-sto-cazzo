@@ -142,9 +142,9 @@ window.generateLink = async function(id, type, btnElem) {
         <button class="btn btn-primary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="copyToClipboard('${url}')">
           📋 Copia Link
         </button>
-        <a href="${url}" target="_blank" class="btn btn-secondary" style="flex:1; padding:0.5rem; font-size:0.85rem; text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center;">
+        <button class="btn btn-secondary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="openNetflixLink('${url}')">
           🚀 Apri Subito
-        </a>
+        </button>
       </div>
     `;
     linkContainer.classList.remove('hidden');
@@ -159,4 +159,10 @@ window.generateLink = async function(id, type, btnElem) {
     }
   }
 }
+
+window.openNetflixLink = function(url) {
+  // Triggers native iOS/Android App Universal Link without opening blank web tab
+  window.location.href = url;
+};
+
 
