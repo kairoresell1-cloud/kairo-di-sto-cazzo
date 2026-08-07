@@ -1,0 +1,7 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python nftoken_web/app.py"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

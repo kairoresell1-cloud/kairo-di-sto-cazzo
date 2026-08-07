@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KAIRO | Admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="logo">KAIRO <span class="gold" style="font-size:1rem; vertical-align:middle;">ADMIN</span></div>
+    <div class="nav-links" id="navAuth">
+      <a href="/static/dashboard.html">Dashboard</a>
+      <a href="/auth/logout" class="btn btn-secondary" style="padding: 0.4rem 1rem;">Logout</a>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="grid mb-2" id="statsGrid" style="grid-template-columns: repeat(4, 1fr);">
+      <div class="card" style="padding:1.5rem;">
+        <h4 style="color:var(--text-muted); font-size:0.9rem;">Total Keys</h4>
+        <h2 id="stat-total-keys">0</h2>
+      </div>
+      <div class="card" style="padding:1.5rem;">
+        <h4 style="color:var(--text-muted); font-size:0.9rem;">Available Keys</h4>
+        <h2 id="stat-available-keys" style="color:var(--success)">0</h2>
+      </div>
+      <div class="card" style="padding:1.5rem;">
+        <h4 style="color:var(--text-muted); font-size:0.9rem;">Redeemed Keys</h4>
+        <h2 id="stat-redeemed-keys" style="color:var(--blue)">0</h2>
+      </div>
+      <div class="card" style="padding:1.5rem;">
+        <h4 style="color:var(--text-muted); font-size:0.9rem;">Valid Cookies</h4>
+        <h2 id="stat-valid-cookies" class="gold">0</h2>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-target="keys">🔑 Keys</div>
+      <div class="tab" data-target="cookies">🍪 Cookies</div>
+      <div class="tab hidden" id="nav-tab-admins" data-target="admins">👑 Admins</div>
+    </div>
+
+    <div id="tab-keys" class="tab-content active">
+      <div class="card mb-2">
+        <h3>Generate Keys</h3>
+        <div style="display:flex; gap:10px; margin-top:1rem; align-items:center;">
+          <input type="number" id="genCount" value="10" min="1" max="100" style="width:100px;">
+          <button class="btn btn-primary" onclick="generateNewKeys()">Generate</button>
+        </div>
+        <div id="genResult" class="hidden mt-1" style="background:rgba(0,0,0,0.5); padding:1rem; border-radius:6px; max-height:200px; overflow-y:auto; font-family:monospace; font-size:0.9rem;"></div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+          <h3>Manage Keys</h3>
+          <input type="text" id="searchKeys" placeholder="Search keys..." style="padding:0.5rem 1rem;">
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Key Code</th>
+                <th>Status</th>
+                <th>Redeemed By</th>
+                <th>Cookie Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="keysTableBody">
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-cookies" class="tab-content">
+      <div class="card">
+        <h3 class="mb-1">Upload Cookies</h3>
+        <p class="mb-2" style="color:var(--text-muted); font-size:0.9rem;">Drag and drop a .txt file anywhere on the page, or paste raw JSON/Netscape cookies below.</p>
+        
+        <div id="dropZone" class="drop-zone mb-2">
+          <i>📄</i>
+          <p>Drop cookie files here</p>
+        </div>
+
+        <textarea id="cookieInput" rows="6" placeholder="Paste cookie content here..."></textarea>
+        <button class="btn btn-primary mt-1" onclick="uploadCookies()">Upload & Validate</button>
+        
+        <div id="cookieResult" class="hidden mt-1 p-1" style="border:1px solid var(--card-border); border-radius:6px; padding:1rem;"></div>
+      </div>
+    </div>
+
+    <div id="tab-admins" class="tab-content">
+      <div class="card">
+        <h3>Admin Management</h3>
+        <p class="mb-2" style="color:var(--text-muted); font-size:0.9rem;">Grant or revoke admin privileges for registered users. Only you (the Owner) can see this.</p>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="usersTableBody">
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="toast-container"></div>
+
+  <script src="/static/kairo.js"></script>
+  <script src="/static/admin.js"></script>
+</body>
+</html>
