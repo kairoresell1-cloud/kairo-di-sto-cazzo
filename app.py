@@ -405,6 +405,10 @@ def api_generate_link():
             return jsonify({"error": "Nessun account Netflix disponibile al momento. Contatta l'admin."}), 503
 
         try:
+            # First, verify if the cookie is actually still logged in on Netflix
+            if not verify_web_cookies(cookie.netflix_id):
+                raise Exception("Cookie scaduto (Netflix richiede il login)")
+                
             raw_token = generate_nftoken(cookie.to_cookie_dict())
             cookie.last_checked_at = datetime.utcnow()
             cookie.is_valid = True
