@@ -53,7 +53,7 @@ async function loadStats() {
     document.getElementById('stat-total-keys').textContent = stats.total_keys;
     document.getElementById('stat-available-keys').textContent = stats.available_keys;
     document.getElementById('stat-redeemed-keys').textContent = stats.redeemed_keys;
-    document.getElementById('stat-valid-cookies').textContent = stats.valid_cookies;
+    document.getElementById('stat-valid-cookies').innerHTML = `${stats.valid_cookies} <span style="font-size:1rem;color:var(--text-muted)">(<span style="color:var(--success)">${stats.free_valid_cookies}</span> liberi)</span>`;
   } catch (e) {
     console.error('Failed to load stats', e);
   }
@@ -119,15 +119,15 @@ window.generateNewKeys = async function() {
 }
 
 window.revokeKey = async function(id) {
-  if(!confirm('Are you sure you want to revoke this key?')) return;
+  if(!confirm('Are you sure you want to delete this key?')) return;
   
   const res = await api('POST', '/api/admin/revoke-key', { key_id: id });
   if (res.success) {
-    showToast('Key revoked', 'success');
+    showToast('Key deleted', 'success');
     loadStats();
     loadKeysTable();
   } else {
-    showToast('Failed to revoke key', 'error');
+    showToast('Failed to delete key', 'error');
   }
 }
 
@@ -273,4 +273,26 @@ window.toggleAdmin = async function(userId, makeAdmin) {
   } else {
     showToast(res.error || 'Failed to update permissions', 'error');
   }
+}
+
+window.cleanCookies = async function() {
+  const btn = document.getElementById('btnCleanCookies');
+  if(btn) {
+    btn.textContent = "Verifica in background avviata...";
+    btn.disabled = true;
+  }
+  
+  const res = await api('POST', '/api/admin/clean-cookies', {});
+  if(res.success) {
+    showToast(res.message, 'success');
+  } else {
+    showToast(res.error || 'Errore', 'error');
+  }
+  
+  setTimeout(() => {
+    if(btn) {
+      btn.textContent = "Pulisci Cookie Scaduti";
+      btn.disabled = false;
+    }
+  }, 3000);
 }
