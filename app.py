@@ -463,6 +463,15 @@ def api_admin_stats():
     total_cookies = CookiePool.query.count()
     valid_cookies = CookiePool.query.filter_by(is_valid=True).count()
 
+    used_ids = db.session.query(Key.cookie_id).filter(
+        Key.cookie_id.isnot(None), Key.is_revoked == False
+    ).subquery()
+    
+    free_valid_cookies = CookiePool.query.filter(
+        CookiePool.is_valid == True,
+        ~CookiePool.id.in_(used_ids)
+    ).count()
+
     return jsonify({
         "total_keys":    total_keys,
         "available_keys": available,
@@ -470,6 +479,7 @@ def api_admin_stats():
         "revoked_keys":  total_keys - available - redeemed,
         "total_cookies": total_cookies,
         "valid_cookies": valid_cookies,
+        "free_valid_cookies": free_valid_cookies,
     })
 
 
@@ -550,7 +560,7 @@ def api_admin_revoke_key():
     if not key:
         return jsonify({"error": "Key non trovata."}), 404
 
-    key.is_revoked = True
+    db.session.delete(key)
     db.session.commit()
     return jsonify({"success": True})
 
