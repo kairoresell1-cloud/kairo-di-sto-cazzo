@@ -213,9 +213,8 @@ def extract_all_cookie_sets(raw: str) -> list[dict]:
 
 def verify_web_cookies(netflix_id: str) -> bool:
     """
-    Whitelist approach: visit /browse with allow_redirects=False.
-    Valid cookie  → 200 or redirect to known logged-in path.
-    Expired cookie → redirect to login / locale homepage → NOT in whitelist → False.
+    Valid cookie  → Lands on /browse or /profiles.
+    Expired/Payment required → Redirects to /login or /cleardunning or shows payment update.
     """
     try:
         r = requests.get(
@@ -224,14 +223,30 @@ def verify_web_cookies(netflix_id: str) -> bool:
             headers=_WEB_HEADERS,
             timeout=15,
             verify=False,
-            allow_redirects=False,
+            allow_redirects=True,
         )
-        if r.status_code == 200:
-            return True
-        if r.status_code in (301, 302, 303, 307, 308):
-            location = r.headers.get("Location", "").lower()
-            return any(location.startswith(p) or p in location for p in _LOGGED_IN_PATHS)
-        return False
+        
+        final_url = r.url.lower()
+        html_content = r.text.lower()
+        
+        # Bad paths indicating logout or payment issues
+        bad_paths = ["login", "cleardunning", "payment", "update", "dunning", "cancel"]
+        if any(b in final_url for b in bad_paths):
+            return False
+            
+        # Bad keywords in HTML (soft-redirects to payment or internal React state showing suspended account)
+        bad_keywords = [
+            "managepaymentinfo", "updateprimarypayment", "aggiornare i dati di pagamento", 
+            "update your payment", "riavvia il tuo abbonamento", "restart your membership",
+            '"membershipstatus":"dunning"', '"membershipstatus":"cancelled"', 
+            '"membershipstatus":"never_member"', '"isnonmember":true',
+            "aggiorna i dati di pagamento", "verifica il tuo metodo di pagamento"
+        ]
+        if any(k in html_content for k in bad_keywords):
+            return False
+            
+        # Ensure we actually landed on a logged in page
+        return any(p in final_url for p in _LOGGED_IN_PATHS)
     except Exception as exc:
         log.warning("verify_web_cookies error: %s", exc)
         return True   # network error → don't discard
