@@ -35,9 +35,18 @@ app.config.update(
     SECRET_KEY           = os.getenv("SECRET_KEY", secrets.token_hex(32)),
     SQLALCHEMY_DATABASE_URI      = _db_url,
     SQLALCHEMY_TRACK_MODIFICATIONS = False,
+    SEND_FILE_MAX_AGE_DEFAULT    = 0,
     GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", ""),
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", ""),
 )
+
+@app.after_request
+def add_no_cache_headers(response):
+    if request.path.startswith("/static/") or request.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 db.init_app(app)
 
@@ -72,7 +81,7 @@ _QUERY_PARAMS = {
     "appVersion": "15.48.1",
     "config": '{"gamesInTrailersEnabled":"false","cdsMyListSortEnabled":"true","kidsBillboardEnabled":"true","billboardEnabled":"true","useCDSGalleryEnabled":"true","sharksEnabled":"true"}',
     "device_type": "NFAPPL-02-",
-    "esn": "NFAPPL-02-IPHONE8%3D1-PXA-02026U9VV5O8AUKEAEO8PUJETCGDD4PQRI9DEB3MDLEMD0EACM4CS78LMD334MN3MQ3NMJ8SU9O9MVGS6BJCURM1PH1MUTGDPF4S4200",
+    "esn": "NFAPPL-02-IPHONE8=1-PXA-02026U9VV5O8AUKEAEO8PUJETCGDD4PQRI9DEB3MDLEMD0EACM4CS78LMD334MN3MQ3NMJ8SU9O9MVGS6BJCURM1PH1MUTGDPF4S4200",
     "idiom": "phone", "iosVersion": "15.8.5", "isTablet": "false",
     "languages": "en-US", "locale": "en-US", "maxDeviceWidth": "375",
     "model": "saget", "modelType": "IPHONE8-1", "odpAware": "true",
@@ -202,27 +211,57 @@ def extract_all_cookie_sets(raw: str) -> list[dict]:
 
 # ── Cookie / token verification ────────────────────────────────────────────────
 
-def verify_web_cookies(netflix_id: str) -> bool:
+def verify_web_cookies(cookie_dict: dict) -> bool:
     """
-    Whitelist approach: visit /browse with allow_redirects=False.
-    Valid cookie  → 200 or redirect to known logged-in path.
-    Expired cookie → redirect to login / locale homepage → NOT in whitelist → False.
+    Valid cookie  → Lands on /browse or /profiles.
+    Expired/Payment required → Redirects to /login or /cleardunning or shows payment update.
     """
     try:
+        # Build cookies dict safely
+        req_cookies = {}
+        for k in ["NetflixId", "SecureNetflixId", "nfvdid", "OptanonConsent"]:
+            if cookie_dict.get(k):
+                req_cookies[k] = cookie_dict[k]
+                
         r = requests.get(
             "https://www.netflix.com/browse",
-            cookies={"NetflixId": netflix_id},
+            cookies=req_cookies,
             headers=_WEB_HEADERS,
             timeout=15,
             verify=False,
-            allow_redirects=False,
+            allow_redirects=True,
         )
-        if r.status_code == 200:
-            return True
-        if r.status_code in (301, 302, 303, 307, 308):
-            location = r.headers.get("Location", "").lower()
-            return any(location.startswith(p) or p in location for p in _LOGGED_IN_PATHS)
-        return False
+        
+        final_url = r.url.lower()
+        html_content = r.text.lower()
+        
+        # Bad paths indicating logout or payment issues
+        # Notice that /it/ or /en/ alone (regional homepage) means we are logged out.
+        # But /it/browse is fine.
+        bad_paths = ["login", "cleardunning", "payment", "update", "dunning", "cancel"]
+        if any(b in final_url for b in bad_paths):
+            return False
+            
+        # If redirected to the base regional homepage (e.g. netflix.com/it/ or netflix.com/it-en/), it means logged out.
+        path_only = urllib.parse.urlparse(r.url).path
+        if re.match(r"^/[a-z]{2}(-[a-z]{2})?/?$", path_only):
+            return False
+            
+        # Bad keywords in HTML (soft-redirects to payment or internal React state showing suspended account)
+        bad_keywords = [
+            "managepaymentinfo", "updateprimarypayment", "aggiornare i dati di pagamento", 
+            "update your payment", "riavvia il tuo abbonamento", "restart your membership",
+            '"membershipstatus":"dunning"', '"membershipstatus":"cancelled"', 
+            '"membershipstatus":"never_member"', '"isnonmember":true',
+            "aggiorna i dati di pagamento", "verifica il tuo metodo di pagamento",
+            '"responseclassification":"denied"', '"isplaybackallowed":false',
+            "zaktualizuj informacje dotyczące płatności", "zaktualizuj metodę płatności"
+        ]
+        if any(k in html_content for k in bad_keywords):
+            return False
+            
+        # Ensure we actually landed on a logged in page
+        return any(p in path_only for p in _LOGGED_IN_PATHS)
     except Exception as exc:
         log.warning("verify_web_cookies error: %s", exc)
         return True   # network error → don't discard
@@ -396,6 +435,10 @@ def api_generate_link():
             return jsonify({"error": "Nessun account Netflix disponibile al momento. Contatta l'admin."}), 503
 
         try:
+            # First, verify if the cookie is actually still logged in on Netflix
+            if not verify_web_cookies(cookie.to_cookie_dict()):
+                raise Exception("Cookie scaduto (Netflix richiede il login)")
+                
             raw_token = generate_nftoken(cookie.to_cookie_dict())
             cookie.last_checked_at = datetime.utcnow()
             cookie.is_valid = True
@@ -411,19 +454,12 @@ def api_generate_link():
     if not token:
         return jsonify({"error": "I cookie collegati a questa key sono scaduti. Contatta l'assistenza per caricare nuovi cookie."}), 503
 
-    # URL-encode the token to avoid '+' becoming spaces in query strings
-    encoded_token = urllib.parse.quote(token, safe="")
-    
-    pc_url      = "https://www.netflix.com/youraccount?nftoken=" + encoded_token
-    ios_url     = "https://www.netflix.com/youraccount?nftoken=" + encoded_token
-    ios_app_url = "https://www.netflix.com/browse?nftoken=" + encoded_token
-    android_url = "https://www.netflix.com/unsupported?nftoken=" + encoded_token
+    universal_url = f"https://www.netflix.com/tv8?nftoken={token}"
     
     return jsonify({
-        "url": pc_url,
-        "ios_url": ios_url,
-        "ios_app_url": ios_app_url,
-        "android_url": android_url,
+        "url": universal_url,
+        "ios_url": universal_url,
+        "android_url": universal_url,
         "token": token,
         "timestamp": datetime.utcnow().isoformat()
     })
@@ -440,6 +476,15 @@ def api_admin_stats():
     total_cookies = CookiePool.query.count()
     valid_cookies = CookiePool.query.filter_by(is_valid=True).count()
 
+    used_ids = db.session.query(Key.cookie_id).filter(
+        Key.cookie_id.isnot(None), Key.is_revoked == False
+    ).subquery()
+    
+    free_valid_cookies = CookiePool.query.filter(
+        CookiePool.is_valid == True,
+        ~CookiePool.id.in_(used_ids)
+    ).count()
+
     return jsonify({
         "total_keys":    total_keys,
         "available_keys": available,
@@ -447,6 +492,7 @@ def api_admin_stats():
         "revoked_keys":  total_keys - available - redeemed,
         "total_cookies": total_cookies,
         "valid_cookies": valid_cookies,
+        "free_valid_cookies": free_valid_cookies,
     })
 
 
@@ -527,7 +573,7 @@ def api_admin_revoke_key():
     if not key:
         return jsonify({"error": "Key non trovata."}), 404
 
-    key.is_revoked = True
+    db.session.delete(key)
     db.session.commit()
     return jsonify({"success": True})
 
@@ -559,7 +605,7 @@ def api_admin_validate_cookie():
         return jsonify({"status": "skipped"})
 
     # Verify the cookie is actually valid
-    if not verify_web_cookies(netflix_id):
+    if not verify_web_cookies(cs):
         return jsonify({"status": "invalid"})
 
     entry = CookiePool(
@@ -575,6 +621,25 @@ def api_admin_validate_cookie():
 
     return jsonify({"status": "added"})
 
+
+@app.route("/api/admin/clean-cookies", methods=["POST"])
+@admin_required
+def api_admin_clean_cookies():
+    import threading
+    def _verify_all_cookies():
+        with app.app_context():
+            cookies = CookiePool.query.filter_by(is_valid=True).all()
+            for cookie in cookies:
+                try:
+                    if not verify_web_cookies(cookie.to_cookie_dict()):
+                        cookie.is_valid = False
+                        cookie.last_checked_at = datetime.utcnow()
+                        db.session.commit()
+                except Exception:
+                    pass
+
+    threading.Thread(target=_verify_all_cookies).start()
+    return jsonify({"success": True, "message": "Verifica in background avviata."})
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
