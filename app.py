@@ -241,7 +241,8 @@ def verify_web_cookies(netflix_id: str) -> bool:
             '"membershipstatus":"dunning"', '"membershipstatus":"cancelled"', 
             '"membershipstatus":"never_member"', '"isnonmember":true',
             "aggiorna i dati di pagamento", "verifica il tuo metodo di pagamento",
-            '"responseclassification":"denied"'
+            '"responseclassification":"denied"', '"isplaybackallowed":false',
+            "zaktualizuj informacje dotyczące płatności", "zaktualizuj metodę płatności"
         ]
         if any(k in html_content for k in bad_keywords):
             return False
@@ -597,6 +598,25 @@ def api_admin_validate_cookie():
 
     return jsonify({"status": "added"})
 
+
+@app.route("/api/admin/clean-cookies", methods=["POST"])
+@admin_required
+def api_admin_clean_cookies():
+    import threading
+    def _verify_all_cookies():
+        with app.app_context():
+            cookies = CookiePool.query.filter_by(is_valid=True).all()
+            for cookie in cookies:
+                try:
+                    if not verify_web_cookies(cookie.netflix_id):
+                        cookie.is_valid = False
+                        cookie.last_checked_at = datetime.utcnow()
+                        db.session.commit()
+                except Exception:
+                    pass
+
+    threading.Thread(target=_verify_all_cookies).start()
+    return jsonify({"success": True, "message": "Verifica in background avviata."})
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 

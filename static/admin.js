@@ -274,3 +274,25 @@ window.toggleAdmin = async function(userId, makeAdmin) {
     showToast(res.error || 'Failed to update permissions', 'error');
   }
 }
+
+window.cleanCookies = async function() {
+  const btn = document.getElementById('btnCleanCookies');
+  if(btn) {
+    btn.textContent = "Verifica in background avviata...";
+    btn.disabled = true;
+  }
+  
+  const res = await api('POST', '/api/admin/clean-cookies', {});
+  if(res.success) {
+    showToast(res.message, 'success');
+  } else {
+    showToast(res.error || 'Errore', 'error');
+  }
+  
+  setTimeout(() => {
+    if(btn) {
+      btn.textContent = "Pulisci Cookie Scaduti";
+      btn.disabled = false;
+    }
+  }, 3000);
+}
