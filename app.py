@@ -240,7 +240,8 @@ def verify_web_cookies(netflix_id: str) -> bool:
             "update your payment", "riavvia il tuo abbonamento", "restart your membership",
             '"membershipstatus":"dunning"', '"membershipstatus":"cancelled"', 
             '"membershipstatus":"never_member"', '"isnonmember":true',
-            "aggiorna i dati di pagamento", "verifica il tuo metodo di pagamento"
+            "aggiorna i dati di pagamento", "verifica il tuo metodo di pagamento",
+            '"responseclassification":"denied"'
         ]
         if any(k in html_content for k in bad_keywords):
             return False
