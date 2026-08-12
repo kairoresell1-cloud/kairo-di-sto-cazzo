@@ -230,8 +230,15 @@ def verify_web_cookies(netflix_id: str) -> bool:
         html_content = r.text.lower()
         
         # Bad paths indicating logout or payment issues
+        # Notice that /it/ or /en/ alone (regional homepage) means we are logged out.
+        # But /it/browse is fine.
         bad_paths = ["login", "cleardunning", "payment", "update", "dunning", "cancel"]
         if any(b in final_url for b in bad_paths):
+            return False
+            
+        # If redirected to the base regional homepage (e.g. netflix.com/it/ or netflix.com/it-en/), it means logged out.
+        path_only = urllib.parse.urlparse(r.url).path
+        if re.match(r"^/[a-z]{2}(-[a-z]{2})?/?$", path_only):
             return False
             
         # Bad keywords in HTML (soft-redirects to payment or internal React state showing suspended account)
@@ -248,7 +255,7 @@ def verify_web_cookies(netflix_id: str) -> bool:
             return False
             
         # Ensure we actually landed on a logged in page
-        return any(p in final_url for p in _LOGGED_IN_PATHS)
+        return any(p in path_only for p in _LOGGED_IN_PATHS)
     except Exception as exc:
         log.warning("verify_web_cookies error: %s", exc)
         return True   # network error → don't discard
