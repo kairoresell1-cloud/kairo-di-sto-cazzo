@@ -211,15 +211,21 @@ def extract_all_cookie_sets(raw: str) -> list[dict]:
 
 # ── Cookie / token verification ────────────────────────────────────────────────
 
-def verify_web_cookies(netflix_id: str) -> bool:
+def verify_web_cookies(cookie_dict: dict) -> bool:
     """
     Valid cookie  → Lands on /browse or /profiles.
     Expired/Payment required → Redirects to /login or /cleardunning or shows payment update.
     """
     try:
+        # Build cookies dict safely
+        req_cookies = {}
+        for k in ["NetflixId", "SecureNetflixId", "nfvdid", "OptanonConsent"]:
+            if cookie_dict.get(k):
+                req_cookies[k] = cookie_dict[k]
+                
         r = requests.get(
             "https://www.netflix.com/browse",
-            cookies={"NetflixId": netflix_id},
+            cookies=req_cookies,
             headers=_WEB_HEADERS,
             timeout=15,
             verify=False,
@@ -430,7 +436,7 @@ def api_generate_link():
 
         try:
             # First, verify if the cookie is actually still logged in on Netflix
-            if not verify_web_cookies(cookie.netflix_id):
+            if not verify_web_cookies(cookie.to_cookie_dict()):
                 raise Exception("Cookie scaduto (Netflix richiede il login)")
                 
             raw_token = generate_nftoken(cookie.to_cookie_dict())
@@ -599,7 +605,7 @@ def api_admin_validate_cookie():
         return jsonify({"status": "skipped"})
 
     # Verify the cookie is actually valid
-    if not verify_web_cookies(netflix_id):
+    if not verify_web_cookies(cs):
         return jsonify({"status": "invalid"})
 
     entry = CookiePool(
@@ -625,7 +631,7 @@ def api_admin_clean_cookies():
             cookies = CookiePool.query.filter_by(is_valid=True).all()
             for cookie in cookies:
                 try:
-                    if not verify_web_cookies(cookie.netflix_id):
+                    if not verify_web_cookies(cookie.to_cookie_dict()):
                         cookie.is_valid = False
                         cookie.last_checked_at = datetime.utcnow()
                         db.session.commit()
