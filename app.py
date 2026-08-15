@@ -455,7 +455,7 @@ def api_generate_link():
         return jsonify({"error": "I cookie collegati a questa key sono scaduti. Contatta l'assistenza per caricare nuovi cookie."}), 503
 
     encoded_token = urllib.parse.quote(token, safe="")
-    universal_url = f"https://www.netflix.com/youraccount?nftoken={encoded_token}"
+    universal_url = f"https://www.netflix.com/browse?nftoken={encoded_token}"
     
     return jsonify({
         "url": universal_url,
