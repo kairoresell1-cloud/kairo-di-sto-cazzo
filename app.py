@@ -224,10 +224,11 @@ def extract_spotify_cookie_sets(raw: str) -> list[dict]:
     """
     Parse raw text/JSON/Netscape to extract Spotify cookie sets.
     The key cookie is sp_dc; sp_t and sp_key are optional extras.
+    Accepts: JSON array, JSON object, Netscape TSV, inline "sp_dc=..." string.
     """
     sets = []
 
-    # Try JSON array (exported from browser extension)
+    # ── 1. Try JSON (browser extension export) ─────────────────────────────────
     try:
         data = json.loads(raw)
         if isinstance(data, list):
@@ -244,17 +245,18 @@ def extract_spotify_cookie_sets(raw: str) -> list[dict]:
     except Exception:
         pass
 
-    # Netscape / text format
+    # ── 2. Netscape tab-separated format ───────────────────────────────────────
     lines = raw.splitlines()
     current = {}
     for line in lines:
         stripped = line.strip()
         if _HTTPONLY.match(stripped):
             stripped = _HTTPONLY.sub("", stripped)
-        if _COMMENT.match(stripped) and "\\t" not in stripped:
+        # Skip comment lines that have no tab (real Netscape lines always have tabs)
+        if _COMMENT.match(stripped) and "\t" not in stripped:
             continue
 
-        parts = stripped.split("\\t")
+        parts = stripped.split("\t")   # <-- real tab, not \\t
         if len(parts) == 7:
             _, _f, _p, _s, _e, name, value = parts
             name = name.strip(); value = value.strip()
@@ -265,6 +267,7 @@ def extract_spotify_cookie_sets(raw: str) -> list[dict]:
                 current = {}
             current[name] = _decode(value)
         else:
+            # ── 3. Inline "key=value; key=value" on same/different lines ──────
             for pair in stripped.split(";"):
                 pair = pair.strip()
                 if "=" not in pair:
@@ -281,12 +284,13 @@ def extract_spotify_cookie_sets(raw: str) -> list[dict]:
     if "sp_dc" in current:
         sets.append(current)
 
-    # Inline sp_dc= detection
-    inline = re.findall(r"sp_dc=([^\s;,\"']+)", raw)
+    # ── 4. Last-resort: grab any sp_dc=VALUE from raw text ────────────────────
+    # Matches base64/hex values with no surrounding quotes or spaces
+    inline = re.findall(r"sp_dc=([A-Za-z0-9%_\-\.~+/=]{20,})", raw)
     existing = {s.get("sp_dc", "") for s in sets}
     for val in inline:
         decoded = _decode(val)
-        if decoded not in existing and len(decoded) > 20:
+        if decoded not in existing:
             sets.append({"sp_dc": decoded})
             existing.add(decoded)
 
