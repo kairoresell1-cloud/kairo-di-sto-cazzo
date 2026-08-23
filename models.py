@@ -44,10 +44,19 @@ class CookiePool(db.Model):
     __tablename__ = "cookies_pool"
 
     id                = db.Column(db.Integer, primary_key=True)
-    netflix_id        = db.Column(db.String(1000), unique=True, nullable=False)
+    service           = db.Column(db.String(20), default="netflix", nullable=False)
+
+    # ── Netflix cookies ──────────────────────────────────────────────────────────
+    netflix_id        = db.Column(db.String(1000), unique=True, nullable=True)
     secure_netflix_id = db.Column(db.String(1000))
     nfvdid            = db.Column(db.String(1000))
     optanon_consent   = db.Column(db.Text)
+
+    # ── Spotify cookies ──────────────────────────────────────────────────────────
+    sp_dc             = db.Column(db.String(1000), unique=True, nullable=True)
+    sp_t              = db.Column(db.String(1000))
+    sp_key            = db.Column(db.String(1000))
+
     is_valid          = db.Column(db.Boolean, default=True)
     added_at          = db.Column(db.DateTime, default=datetime.utcnow)
     last_checked_at   = db.Column(db.DateTime)
@@ -55,15 +64,24 @@ class CookiePool(db.Model):
     keys = db.relationship("Key", backref="cookie", lazy=True)
 
     def to_cookie_dict(self):
-        """Return as dict compatible with generate_nftoken()."""
-        d = {"NetflixId": self.netflix_id}
-        if self.secure_netflix_id:
-            d["SecureNetflixId"] = self.secure_netflix_id
-        if self.nfvdid:
-            d["nfvdid"] = self.nfvdid
-        if self.optanon_consent:
-            d["OptanonConsent"] = self.optanon_consent
-        return d
+        """Return as dict compatible with generate_nftoken() or verify_spotify_cookies()."""
+        if self.service == "spotify":
+            d = {}
+            if self.sp_dc:  d["sp_dc"]  = self.sp_dc
+            if self.sp_t:   d["sp_t"]   = self.sp_t
+            if self.sp_key: d["sp_key"] = self.sp_key
+            return d
+        else:
+            d = {}
+            if self.netflix_id:        d["NetflixId"]       = self.netflix_id
+            if self.secure_netflix_id: d["SecureNetflixId"] = self.secure_netflix_id
+            if self.nfvdid:            d["nfvdid"]          = self.nfvdid
+            if self.optanon_consent:   d["OptanonConsent"]  = self.optanon_consent
+            return d
+
+    def primary_id(self):
+        """Return the primary identifier for duplicate detection."""
+        return self.sp_dc if self.service == "spotify" else self.netflix_id
 
 
 class Key(db.Model):
@@ -71,6 +89,7 @@ class Key(db.Model):
 
     id              = db.Column(db.Integer, primary_key=True)
     key_code        = db.Column(db.String(50), unique=True, nullable=False)
+    service         = db.Column(db.String(20), default="netflix", nullable=False)
     created_at      = db.Column(db.DateTime, default=datetime.utcnow)
     redeemed_at     = db.Column(db.DateTime)
     redeemed_by_id  = db.Column(db.Integer, db.ForeignKey("users.id"))
@@ -89,6 +108,7 @@ class Key(db.Model):
         d = {
             "id":           self.id,
             "key_code":     self.key_code,
+            "service":      self.service,
             "created_at":   self.created_at.isoformat() if self.created_at else None,
             "redeemed_at":  self.redeemed_at.isoformat() if self.redeemed_at else None,
             "is_revoked":   self.is_revoked,
@@ -112,17 +132,17 @@ def generate_key_code() -> str:
 
 def get_valid_cookie_for_key(key: Key) -> CookiePool | None:
     """
-    Return a valid cookie for this key.
+    Return a valid cookie for this key, filtered by matching service.
     If the current cookie is invalid/missing, rotate to a fresh one from the pool.
     """
-    if key.cookie and key.cookie.is_valid:
+    if key.cookie and key.cookie.is_valid and key.cookie.service == key.service:
         return key.cookie
 
     old_cookie = key.cookie
     if old_cookie:
         old_cookie.is_valid = False
 
-    # 1. Try to find a valid cookie that isn't assigned to another active key
+    # 1. Try to find a valid cookie that matches the service and isn't assigned to another active key
     used_ids = db.session.query(Key.cookie_id).filter(
         Key.cookie_id.isnot(None),
         Key.id != key.id,
@@ -131,16 +151,20 @@ def get_valid_cookie_for_key(key: Key) -> CookiePool | None:
 
     fresh = CookiePool.query.filter(
         CookiePool.is_valid == True,
+        CookiePool.service == key.service,
         ~CookiePool.id.in_(used_ids),
     ).first()
 
-    # 2. If none unused, fallback to any valid cookie in the pool
+    # 2. If none unused, fallback to any valid cookie of the same service in the pool
     if not fresh:
-        fresh = CookiePool.query.filter(CookiePool.is_valid == True).first()
+        fresh = CookiePool.query.filter(
+            CookiePool.is_valid == True,
+            CookiePool.service == key.service,
+        ).first()
 
-    # 3. Auto-recovery: If all cookies in pool were marked invalid by previous bug, resurrect to re-test
+    # 3. Auto-recovery: resurrect one if all were marked invalid
     if not fresh:
-        fresh = CookiePool.query.first()
+        fresh = CookiePool.query.filter(CookiePool.service == key.service).first()
         if fresh:
             fresh.is_valid = True
 
@@ -151,4 +175,3 @@ def get_valid_cookie_for_key(key: Key) -> CookiePool | None:
         return fresh
 
     return None
-

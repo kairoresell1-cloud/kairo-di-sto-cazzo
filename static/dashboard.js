@@ -33,13 +33,25 @@ async function loadKeys() {
   emptyState.classList.add('hidden');
   keysGrid.classList.remove('hidden');
   
-  keysGrid.innerHTML = keys.map(k => `
+  keysGrid.innerHTML = keys.map(k => {
+    const svc     = k.service || 'netflix';
+    const isSpot  = svc === 'spotify';
+    const svcColor  = isSpot ? '#1DB954' : '#E50914';
+    const svcShadow = isSpot ? 'rgba(29,185,84,0.4)' : 'rgba(229,9,20,0.4)';
+    const svcBorder = isSpot ? 'rgba(29,185,84,0.3)' : 'rgba(229,9,20,0.3)';
+    const svcLabel  = isSpot ? '🎵 SPOTIFY' : '🎬 NETFLIX';
+    const btnLabel  = isSpot ? '⚡ GENERA LINK SPOTIFY' : '⚡ GENERA LINK NETFLIX';
+
+    return `
     <div class="ticket-card" id="key-card-${k.id}">
       <div class="ticket-header">
         <div style="display:flex; justify-content:space-between; align-items:center; transform: translateZ(40px);">
-          <h3 style="letter-spacing:1.5px; font-weight:700; color:var(--text-color); cursor:pointer;" onclick="toggleKey(${k.id}, '${k.key_code}')" id="key-display-${k.id}">
-            ${maskKey(k.key_code)}
-          </h3>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="badge ${isSpot ? 'badge-spotify' : 'badge-netflix'}" style="font-size:0.7rem; padding:3px 8px;">${svcLabel}</span>
+            <h3 style="letter-spacing:1.5px; font-weight:700; color:var(--text-color); cursor:pointer;" onclick="toggleKey(${k.id}, '${k.key_code}')" id="key-display-${k.id}">
+              ${maskKey(k.key_code)}
+            </h3>
+          </div>
           <div class="badge ${k.cookie_valid ? 'badge-success' : 'badge-error'}">
             <div class="dot ${k.cookie_valid ? 'green' : 'red'}"></div>
             ${k.cookie_valid ? 'Live' : 'Checking'}
@@ -53,16 +65,17 @@ async function loadKeys() {
         </p>
         
         <div style="margin-bottom:1rem; transform: translateZ(50px);">
-          <button class="btn btn-primary" style="width:100%; padding:0.75rem; font-size:0.9rem; font-weight:700; display:flex; align-items:center; justify-content:center; gap:8px; box-shadow: 0 4px 15px rgba(229,9,20,0.4);" onclick="generateLink(${k.id}, this)">
-            ⚡ GENERA LINK NETFLIX
+          <button class="btn btn-primary" style="width:100%; padding:0.75rem; font-size:0.9rem; font-weight:700; display:flex; align-items:center; justify-content:center; gap:8px; box-shadow: 0 4px 15px ${svcShadow}; background:${svcColor}; ${isSpot ? 'color:#000;' : ''}" onclick="generateLink(${k.id}, this, '${svc}')">
+            ${btnLabel}
           </button>
         </div>
         
-        <div id="link-container-${k.id}" class="hidden" style="background:rgba(0,0,0,0.6); padding:1rem; border-radius:8px; border:1px solid rgba(229,9,20,0.3); font-size:0.85rem; position:relative; transform: translateZ(40px);">
+        <div id="link-container-${k.id}" class="hidden" style="background:rgba(0,0,0,0.6); padding:1rem; border-radius:8px; border:1px solid ${svcBorder}; font-size:0.85rem; position:relative; transform: translateZ(40px);">
         </div>
       </div>
     </div>
-  `).join('');
+  `}).join('');
+
   
   // Inizializza l'effetto 3D Glass
   if (window.VanillaTilt) {
@@ -91,7 +104,9 @@ window.toggleKey = function(id, fullKey) {
   }
 }
 
-window.generateLink = async function(id, btnElem) {
+window.generateLink = async function(id, btnElem, svc) {
+  svc = svc || 'netflix';
+  const isSpot = svc === 'spotify';
   const originalHtml = btnElem ? btnElem.innerHTML : '';
   if (btnElem) {
     btnElem.disabled = true;
@@ -113,10 +128,15 @@ window.generateLink = async function(id, btnElem) {
       showToast('Errore generazione link', 'error');
       return;
     }
+
+    const accentColor = isSpot ? '#1DB954' : 'var(--accent-gold)';
+    const serviceLabel = isSpot ? '🎵 LINK SPOTIFY (UNIVERSALE)' : '✨ LINK NETFLIX (UNIVERSALE)';
+    const openLabel    = isSpot ? '🎵 Apri Spotify' : '🚀 Apri Subito';
+    const openFn       = isSpot ? `openServiceLink('${url}')` : `openServiceLink('${url}')`;
     
     linkContainer.innerHTML = `
-      <div style="font-size:0.75rem; color:var(--accent-gold); margin-bottom:6px; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
-        <span>✨ LINK NETFLIX (UNIVERSALE)</span>
+      <div style="font-size:0.75rem; color:${accentColor}; margin-bottom:6px; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
+        <span>${serviceLabel}</span>
         <span style="color:var(--text-muted); font-size:0.7rem;">Live Token</span>
       </div>
       <div style="background:rgba(0,0,0,0.5); padding:8px; border-radius:6px; font-family:monospace; font-size:0.8rem; word-break:break-all; margin-bottom:10px; border:1px solid rgba(255,255,255,0.05); color:#fff;">
@@ -126,13 +146,13 @@ window.generateLink = async function(id, btnElem) {
         <button class="btn btn-primary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="copyToClipboard('${url}')">
           📋 Copia Link
         </button>
-        <button class="btn btn-secondary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="openNetflixLink('${url}')">
-          🚀 Apri Subito
+        <button class="btn btn-secondary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="${openFn}">
+          ${openLabel}
         </button>
       </div>
     `;
     linkContainer.classList.remove('hidden');
-    showToast('Nuovo link generato!', 'success');
+    showToast(isSpot ? '🎵 Link Spotify pronto!' : '🎬 Link Netflix pronto!', 'success');
   } catch (err) {
     console.error(err);
     showToast('Errore di connessione', 'error');
@@ -144,9 +164,7 @@ window.generateLink = async function(id, btnElem) {
   }
 }
 
-window.openNetflixLink = function(url) {
+window.openServiceLink = function(url) {
   // Triggers native iOS/Android App Universal Link without opening blank web tab
   window.location.href = url;
 };
-
-

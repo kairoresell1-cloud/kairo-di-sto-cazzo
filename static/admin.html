@@ -44,8 +44,12 @@
     <div id="tab-keys" class="tab-content active">
       <div class="card mb-2">
         <h3>Generate Keys</h3>
-        <div style="display:flex; gap:10px; margin-top:1rem; align-items:center;">
+        <div style="display:flex; gap:10px; margin-top:1rem; align-items:center; flex-wrap:wrap;">
           <input type="number" id="genCount" value="10" min="1" max="100" style="width:100px;">
+          <div class="service-toggle" id="genServiceToggle">
+            <button class="svc-btn active" data-svc="netflix" onclick="setGenService('netflix', this)">🎬 Netflix</button>
+            <button class="svc-btn" data-svc="spotify" onclick="setGenService('spotify', this)">🎵 Spotify</button>
+          </div>
           <button class="btn btn-primary" onclick="generateNewKeys()">Generate</button>
         </div>
         <div id="genResult" class="hidden mt-1" style="background:rgba(0,0,0,0.5); padding:1rem; border-radius:6px; max-height:200px; overflow-y:auto; font-family:monospace; font-size:0.9rem;"></div>
@@ -61,6 +65,7 @@
             <thead>
               <tr>
                 <th>Key Code</th>
+                <th>Service</th>
                 <th>Status</th>
                 <th>Redeemed By</th>
                 <th>Cookie Status</th>
@@ -79,6 +84,14 @@
         <h3 class="mb-1">Upload Cookies</h3>
         <p class="mb-2" style="color:var(--text-muted); font-size:0.9rem;">Drag and drop a .txt file anywhere on the page, or paste raw JSON/Netscape cookies below.</p>
         
+        <div style="margin-bottom:1rem;">
+          <label style="color:var(--text-muted); font-size:0.85rem; font-weight:600; display:block; margin-bottom:.5rem;">SERVIZIO</label>
+          <div class="service-toggle" id="cookieServiceToggle">
+            <button class="svc-btn active" data-svc="netflix" onclick="setCookieService('netflix', this)">🎬 Netflix</button>
+            <button class="svc-btn" data-svc="spotify" onclick="setCookieService('spotify', this)">🎵 Spotify</button>
+          </div>
+        </div>
+
         <div id="dropZone" class="drop-zone mb-2">
           <i>📄</i>
           <p>Drop cookie files here</p>
