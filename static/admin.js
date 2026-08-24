@@ -44,25 +44,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 });
 
-// ── Service toggle state ──────────────────────────────────────────────────────
-let _genService    = 'netflix';
-let _cookieService = 'netflix';
-
-window.setGenService = function(svc, btn) {
-  _genService = svc;
-  btn.closest('.service-toggle').querySelectorAll('.svc-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-};
-window.setCookieService = function(svc, btn) {
-  _cookieService = svc;
-  btn.closest('.service-toggle').querySelectorAll('.svc-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  const ta = document.getElementById('cookieInput');
-  if (ta) ta.placeholder = svc === 'spotify'
-    ? 'Incolla qui i cookie Spotify (sp_dc=...) o JSON...'
-    : 'Paste cookie content here...';
-};
-
 async function loadStats() {
   try {
     const res = await fetch('/api/admin/stats');
@@ -70,14 +51,9 @@ async function loadStats() {
     const stats = await res.json();
     
     document.getElementById('stat-total-keys').textContent = stats.total_keys;
-    document.getElementById('stat-available-keys').innerHTML =
-      `${stats.available_keys} <span style="font-size:.8rem;color:var(--text-muted)">(<span style="color:#E50914">${stats.netflix_keys_available||0} NF</span> / <span style="color:#1DB954">${stats.spotify_keys_available||0} SP</span>)</span>`;
+    document.getElementById('stat-available-keys').textContent = stats.available_keys;
     document.getElementById('stat-redeemed-keys').textContent = stats.redeemed_keys;
-    document.getElementById('stat-valid-cookies').innerHTML =
-      `${stats.valid_cookies} <span style="font-size:.85rem;color:var(--text-muted)">` +
-      `(<span style="color:#E50914">NF: ${stats.netflix_cookies_valid||0}</span> · ` +
-      `<span style="color:#1DB954">SP: ${stats.spotify_cookies_valid||0}</span> · ` +
-      `<span style="color:var(--success)">${stats.free_valid_cookies} liberi</span>)</span>`;
+    document.getElementById('stat-valid-cookies').innerHTML = `${stats.valid_cookies} <span style="font-size:1rem;color:var(--text-muted)">(<span style="color:var(--success)">${stats.free_valid_cookies}</span> liberi)</span>`;
   } catch (e) {
     console.error('Failed to load stats', e);
   }
@@ -100,11 +76,6 @@ async function loadKeysTable(search = '') {
       let statusBadge = `<span class="badge badge-success">Available</span>`;
       if (k.is_revoked) statusBadge = `<span class="badge badge-error">Revoked</span>`;
       else if (k.redeemed_at) statusBadge = `<span class="badge badge-blue">Redeemed</span>`;
-
-      const svc = k.service || 'netflix';
-      const svcBadge = svc === 'spotify'
-        ? `<span class="badge badge-spotify">🎵 Spotify</span>`
-        : `<span class="badge badge-netflix">🎬 Netflix</span>`;
       
       let cookieBadge = '-';
       if (k.redeemed_at) {
@@ -117,7 +88,6 @@ async function loadKeysTable(search = '') {
       return `
         <tr>
           <td style="font-family:monospace;">${k.key_code}</td>
-          <td>${svcBadge}</td>
           <td>${statusBadge}</td>
           <td>${k.user_email || '-'}</td>
           <td>${cookieBadge}</td>
@@ -134,11 +104,10 @@ async function loadKeysTable(search = '') {
 
 window.generateNewKeys = async function() {
   const count = document.getElementById('genCount').value;
-  const res = await api('POST', '/api/admin/generate-keys', { count: parseInt(count), service: _genService });
+  const res = await api('POST', '/api/admin/generate-keys', { count: parseInt(count) });
   
   if (res.keys) {
-    const svcLabel = _genService === 'spotify' ? '🎵 Spotify' : '🎬 Netflix';
-    showToast(`Generated ${res.keys.length} ${svcLabel} keys`, 'success');
+    showToast(`Generated ${res.keys.length} keys`, 'success');
     const resultDiv = document.getElementById('genResult');
     resultDiv.classList.remove('hidden');
     resultDiv.innerHTML = res.keys.join('<br>') + `<br><br><button class="btn btn-secondary" onclick="copyToClipboard('${res.keys.join('\\n')}')">Copy All</button>`;
@@ -201,8 +170,8 @@ window.uploadCookies = async function() {
   resultDiv.classList.remove('hidden');
   resultDiv.innerHTML = '<span style="color:var(--text-dim)">Parsing cookies...</span>';
   
-  // 1. Estrae i cookie dal testo raw (servizio selezionato)
-  const parseRes = await api('POST', '/api/admin/parse-cookies', { cookie: content, service: _cookieService });
+  // 1. Estrae i cookie dal testo raw
+  const parseRes = await api('POST', '/api/admin/parse-cookies', { cookie: content });
   if (parseRes.error) {
     showToast(parseRes.error, 'error');
     resultDiv.innerHTML = `<span style="color:var(--error)">${parseRes.error}</span>`;
@@ -217,12 +186,11 @@ window.uploadCookies = async function() {
   
   // 2. Valida i cookie uno alla volta per mostrare il progresso live
   let added = 0, skipped = 0, invalid = 0;
-  const svcLabel = _cookieService === 'spotify' ? '🎵 Spotify' : '🎬 Netflix';
   
   for (let i = 0; i < sets.length; i++) {
     resultDiv.innerHTML = `
       <div style="margin-bottom: 15px; font-size: 1.1rem; color: var(--gold);">
-        ⏳ Scansione ${svcLabel}: <b>${i + 1} / ${sets.length}</b>
+        ⏳ Scansione in corso: <b>${i + 1} / ${sets.length}</b>
       </div>
       <div style="display:flex; gap:20px; font-weight:600; font-size: 1.1rem; background: rgba(0,0,0,0.4); padding: 10px; border-radius: 8px;">
         <span style="color:var(--success)">✅ ${added} Aggiunti</span>
@@ -231,9 +199,7 @@ window.uploadCookies = async function() {
       </div>
     `;
     
-    // Pass service along with each cookie set
-    const payload = { ...sets[i], service: _cookieService };
-    const valRes = await api('POST', '/api/admin/validate-cookie', payload);
+    const valRes = await api('POST', '/api/admin/validate-cookie', sets[i]);
     if (valRes.status === 'added') added++;
     else if (valRes.status === 'skipped') skipped++;
     else invalid++;
@@ -242,7 +208,7 @@ window.uploadCookies = async function() {
   // 3. Finito
   resultDiv.innerHTML = `
     <div style="margin-bottom: 15px; font-size: 1.2rem; color: var(--success); font-weight: bold;">
-      ✨ Scansione ${svcLabel} Completata
+      ✨ Scansione Completata
     </div>
     <div style="display:flex; gap:20px; font-weight:600; font-size: 1.1rem; background: rgba(0,0,0,0.4); padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);">
       <span style="color:var(--success)">✅ ${added} Aggiunti</span>
@@ -253,7 +219,6 @@ window.uploadCookies = async function() {
   document.getElementById('cookieInput').value = '';
   loadStats();
 }
-
 
 async function loadUsersTable() {
   try {
