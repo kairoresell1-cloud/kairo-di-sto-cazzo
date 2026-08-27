@@ -423,8 +423,12 @@ def api_redeem():
 @app.route("/api/my-keys")
 @login_required
 def api_my_keys():
-    keys = Key.query.filter_by(redeemed_by_id=current_user.id, is_revoked=False).all()
-    return jsonify([k.to_dict() for k in keys])
+    try:
+        keys = Key.query.filter_by(redeemed_by_id=current_user.id, is_revoked=False).all()
+        return jsonify([k.to_dict() for k in keys])
+    except Exception as e:
+        import traceback
+        return jsonify({"error": "CRASH DB (my-keys): " + str(e), "trace": traceback.format_exc()}), 500
 
 
 @app.route("/api/generate-link", methods=["POST"])

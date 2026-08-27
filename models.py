@@ -48,6 +48,10 @@ class CookiePool(db.Model):
     secure_netflix_id = db.Column(db.String(1000))
     nfvdid            = db.Column(db.String(1000))
     optanon_consent   = db.Column(db.Text)
+    service = db.Column(db.String(20), default="netflix")
+    sp_dc = db.Column(db.Text)
+    sp_t = db.Column(db.Text)
+    sp_key = db.Column(db.Text)
     is_valid          = db.Column(db.Boolean, default=True)
     added_at          = db.Column(db.DateTime, default=datetime.utcnow)
     last_checked_at   = db.Column(db.DateTime)
@@ -74,6 +78,7 @@ class Key(db.Model):
     created_at      = db.Column(db.DateTime, default=datetime.utcnow)
     redeemed_at     = db.Column(db.DateTime)
     redeemed_by_id  = db.Column(db.Integer, db.ForeignKey("users.id"))
+    service = db.Column(db.String(20), default="netflix")
     cookie_id       = db.Column(db.Integer, db.ForeignKey("cookies_pool.id"))
     is_revoked      = db.Column(db.Boolean, default=False)
 
