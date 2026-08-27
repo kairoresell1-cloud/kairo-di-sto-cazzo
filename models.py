@@ -89,6 +89,7 @@ class Key(db.Model):
         d = {
             "id":           self.id,
             "key_code":     self.key_code,
+            "service":      self.service or "netflix",
             "created_at":   self.created_at.isoformat() if self.created_at else None,
             "redeemed_at":  self.redeemed_at.isoformat() if self.redeemed_at else None,
             "is_revoked":   self.is_revoked,
@@ -110,11 +111,7 @@ def generate_key_code() -> str:
     return f"KAIRO-{'-'.join(parts)}"
 
 
-def get_valid_cookie_for_key(key: Key) -> CookiePool | None:
-    """
-    Return a valid cookie for this key.
-    If the current cookie is invalid/missing, rotate to a fresh one from the pool.
-    """
+def get_valid_cookie_for_key(key: Key):
     if key.cookie and key.cookie.is_valid:
         return key.cookie
 
@@ -122,7 +119,13 @@ def get_valid_cookie_for_key(key: Key) -> CookiePool | None:
     if old_cookie:
         old_cookie.is_valid = False
 
-    # 1. Try to find a valid cookie that isn't assigned to another active key
+    from sqlalchemy import or_
+    svc = key.service or "netflix"
+    if svc == "netflix":
+        svc_filter = or_(CookiePool.service == "netflix", CookiePool.service.is_(None))
+    else:
+        svc_filter = (CookiePool.service == svc)
+
     used_ids = db.session.query(Key.cookie_id).filter(
         Key.cookie_id.isnot(None),
         Key.id != key.id,
@@ -131,16 +134,18 @@ def get_valid_cookie_for_key(key: Key) -> CookiePool | None:
 
     fresh = CookiePool.query.filter(
         CookiePool.is_valid == True,
+        svc_filter,
         ~CookiePool.id.in_(used_ids),
     ).first()
 
-    # 2. If none unused, fallback to any valid cookie in the pool
     if not fresh:
-        fresh = CookiePool.query.filter(CookiePool.is_valid == True).first()
+        fresh = CookiePool.query.filter(
+            CookiePool.is_valid == True,
+            svc_filter
+        ).first()
 
-    # 3. Auto-recovery: If all cookies in pool were marked invalid by previous bug, resurrect to re-test
     if not fresh:
-        fresh = CookiePool.query.first()
+        fresh = CookiePool.query.filter(svc_filter).first()
         if fresh:
             fresh.is_valid = True
 

@@ -53,7 +53,7 @@ async function loadStats() {
     document.getElementById('stat-total-keys').textContent = stats.total_keys;
     document.getElementById('stat-available-keys').textContent = stats.available_keys;
     document.getElementById('stat-redeemed-keys').textContent = stats.redeemed_keys;
-    document.getElementById('stat-valid-cookies').innerHTML = `${stats.valid_cookies} <span style="font-size:1rem;color:var(--text-muted)">(<span style="color:var(--success)">${stats.free_valid_cookies}</span> liberi)</span>`;
+    document.getElementById('stat-valid-cookies').textContent = stats.valid_cookies;
   } catch (e) {
     console.error('Failed to load stats', e);
   }
@@ -77,6 +77,11 @@ async function loadKeysTable(search = '') {
       if (k.is_revoked) statusBadge = `<span class="badge badge-error">Revoked</span>`;
       else if (k.redeemed_at) statusBadge = `<span class="badge badge-blue">Redeemed</span>`;
       
+      const svc = k.service || 'netflix';
+      const svcBadge = svc === 'spotify'
+        ? `<span class="badge-spotify">🎵 Spotify</span>`
+        : `<span class="badge-netflix">🎬 Netflix</span>`;
+
       let cookieBadge = '-';
       if (k.redeemed_at) {
         cookieBadge = `<div class="badge ${k.cookie_valid ? 'badge-success' : 'badge-error'}">
@@ -88,6 +93,7 @@ async function loadKeysTable(search = '') {
       return `
         <tr>
           <td style="font-family:monospace;">${k.key_code}</td>
+          <td>${svcBadge}</td>
           <td>${statusBadge}</td>
           <td>${k.user_email || '-'}</td>
           <td>${cookieBadge}</td>
@@ -102,12 +108,28 @@ async function loadKeysTable(search = '') {
   }
 }
 
+// ── Service toggle state ───────────────────────────────────────────────────────
+let _genService    = 'netflix';
+let _cookieService = 'netflix';
+
+window.setGenService = function(svc, btn) {
+  _genService = svc;
+  btn.closest('div').querySelectorAll('.svc-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+};
+
+window.setCookieService = function(svc, btn) {
+  _cookieService = svc;
+  btn.closest('div').querySelectorAll('.svc-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+};
+
 window.generateNewKeys = async function() {
   const count = document.getElementById('genCount').value;
-  const res = await api('POST', '/api/admin/generate-keys', { count: parseInt(count) });
+  const res = await api('POST', '/api/admin/generate-keys', { count: parseInt(count), service: _genService });
   
   if (res.keys) {
-    showToast(`Generated ${res.keys.length} keys`, 'success');
+    showToast(`Generated ${res.keys.length} ${_genService} keys`, 'success');
     const resultDiv = document.getElementById('genResult');
     resultDiv.classList.remove('hidden');
     resultDiv.innerHTML = res.keys.join('<br>') + `<br><br><button class="btn btn-secondary" onclick="copyToClipboard('${res.keys.join('\\n')}')">Copy All</button>`;
@@ -119,15 +141,15 @@ window.generateNewKeys = async function() {
 }
 
 window.revokeKey = async function(id) {
-  if(!confirm('Are you sure you want to delete this key?')) return;
+  if(!confirm('Are you sure you want to revoke this key?')) return;
   
   const res = await api('POST', '/api/admin/revoke-key', { key_id: id });
   if (res.success) {
-    showToast('Key deleted', 'success');
+    showToast('Key revoked', 'success');
     loadStats();
     loadKeysTable();
   } else {
-    showToast('Failed to delete key', 'error');
+    showToast('Failed to revoke key', 'error');
   }
 }
 
@@ -171,7 +193,7 @@ window.uploadCookies = async function() {
   resultDiv.innerHTML = '<span style="color:var(--text-dim)">Parsing cookies...</span>';
   
   // 1. Estrae i cookie dal testo raw
-  const parseRes = await api('POST', '/api/admin/parse-cookies', { cookie: content });
+  const parseRes = await api('POST', '/api/admin/parse-cookies', { cookie: content, service: _cookieService });
   if (parseRes.error) {
     showToast(parseRes.error, 'error');
     resultDiv.innerHTML = `<span style="color:var(--error)">${parseRes.error}</span>`;
@@ -199,7 +221,7 @@ window.uploadCookies = async function() {
       </div>
     `;
     
-    const valRes = await api('POST', '/api/admin/validate-cookie', sets[i]);
+    const valRes = await api('POST', '/api/admin/validate-cookie', { ...sets[i], service: _cookieService });
     if (valRes.status === 'added') added++;
     else if (valRes.status === 'skipped') skipped++;
     else invalid++;
@@ -219,6 +241,7 @@ window.uploadCookies = async function() {
   document.getElementById('cookieInput').value = '';
   loadStats();
 }
+
 
 async function loadUsersTable() {
   try {
@@ -273,26 +296,4 @@ window.toggleAdmin = async function(userId, makeAdmin) {
   } else {
     showToast(res.error || 'Failed to update permissions', 'error');
   }
-}
-
-window.cleanCookies = async function() {
-  const btn = document.getElementById('btnCleanCookies');
-  if(btn) {
-    btn.textContent = "Verifica in background avviata...";
-    btn.disabled = true;
-  }
-  
-  const res = await api('POST', '/api/admin/clean-cookies', {});
-  if(res.success) {
-    showToast(res.message, 'success');
-  } else {
-    showToast(res.error || 'Errore', 'error');
-  }
-  
-  setTimeout(() => {
-    if(btn) {
-      btn.textContent = "Pulisci Cookie Scaduti";
-      btn.disabled = false;
-    }
-  }, 3000);
 }
