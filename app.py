@@ -35,9 +35,18 @@ app.config.update(
     SECRET_KEY           = os.getenv("SECRET_KEY", secrets.token_hex(32)),
     SQLALCHEMY_DATABASE_URI      = _db_url,
     SQLALCHEMY_TRACK_MODIFICATIONS = False,
+    SEND_FILE_MAX_AGE_DEFAULT    = 0,
     GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", ""),
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", ""),
 )
+
+@app.after_request
+def add_no_cache_headers(response):
+    if request.path.startswith("/static/") or request.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 db.init_app(app)
 
@@ -60,29 +69,6 @@ init_oauth(app)
 
 with app.app_context():
     db.create_all()
-    
-    # Auto-migration per aggiungere le nuove colonne in modo sicuro
-    from sqlalchemy import text
-    columns_to_add_cookies = [
-        "service VARCHAR(20) DEFAULT 'netflix'",
-        "sp_dc VARCHAR(1000)",
-        "sp_t VARCHAR(1000)",
-        "sp_key VARCHAR(1000)"
-    ]
-    for col in columns_to_add_cookies:
-        try:
-            db.session.execute(text(f"ALTER TABLE cookies_pool ADD COLUMN {col}"))
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-
-    try:
-        db.session.execute(text("ALTER TABLE keys ADD COLUMN service VARCHAR(20) DEFAULT 'netflix'"))
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        
-    db.session.commit()
 
 # ── Netflix iOS API constants ───────────────────────────────────────────────────
 _TOKEN_NAMES = {"NetflixId", "SecureNetflixId", "nfvdid", "OptanonConsent"}
@@ -95,7 +81,7 @@ _QUERY_PARAMS = {
     "appVersion": "15.48.1",
     "config": '{"gamesInTrailersEnabled":"false","cdsMyListSortEnabled":"true","kidsBillboardEnabled":"true","billboardEnabled":"true","useCDSGalleryEnabled":"true","sharksEnabled":"true"}',
     "device_type": "NFAPPL-02-",
-    "esn": "NFAPPL-02-IPHONE8%3D1-PXA-02026U9VV5O8AUKEAEO8PUJETCGDD4PQRI9DEB3MDLEMD0EACM4CS78LMD334MN3MQ3NMJ8SU9O9MVGS6BJCURM1PH1MUTGDPF4S4200",
+    "esn": "NFAPPL-02-IPHONE8=1-PXA-02026U9VV5O8AUKEAEO8PUJETCGDD4PQRI9DEB3MDLEMD0EACM4CS78LMD334MN3MQ3NMJ8SU9O9MVGS6BJCURM1PH1MUTGDPF4S4200",
     "idiom": "phone", "iosVersion": "15.8.5", "isTablet": "false",
     "languages": "en-US", "locale": "en-US", "maxDeviceWidth": "375",
     "model": "saget", "modelType": "IPHONE8-1", "odpAware": "true",
@@ -137,8 +123,6 @@ _WEB_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 _LOGGED_IN_PATHS = ("/browse", "/selectprofile", "/profiles", "/kids", "/home", "/latest")
-
-_SPOTIFY_TOKEN_NAMES = {"sp_dc", "sp_t", "sp_key"}
 
 
 # ── Cookie parsing ─────────────────────────────────────────────────────────────
@@ -225,130 +209,62 @@ def extract_all_cookie_sets(raw: str) -> list[dict]:
     return sets
 
 
-def extract_spotify_cookie_sets(raw: str) -> list[dict]:
-    """Parse raw text/JSON/Netscape to extract Spotify cookie sets (sp_dc required)."""
-    sets = []
-    # 1. JSON array/object (browser extension export)
-    try:
-        data = json.loads(raw)
-        if isinstance(data, list):
-            c = {x["name"]: _decode(x["value"]) for x in data
-                 if isinstance(x, dict) and x.get("name") in _SPOTIFY_TOKEN_NAMES}
-            if "sp_dc" in c: sets.append(c)
-        elif isinstance(data, dict):
-            c = {k: _decode(v) for k, v in data.items() if k in _SPOTIFY_TOKEN_NAMES}
-            if "sp_dc" in c: sets.append(c)
-        if sets: return sets
-    except Exception:
-        pass
-    # 2. Netscape TSV + inline key=value; format
-    current = {}
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if _HTTPONLY.match(stripped):
-            stripped = _HTTPONLY.sub("", stripped)
-        parts = stripped.split("\t")
-        if len(parts) == 7:
-            name, value = parts[5].strip(), parts[6].strip()
-            if name not in _SPOTIFY_TOKEN_NAMES or len(value) <= 5: continue
-            if name == "sp_dc" and "sp_dc" in current:
-                sets.append(current); current = {}
-            current[name] = _decode(value)
-        else:
-            for pair in stripped.split(";"):
-                pair = pair.strip()
-                if "=" not in pair: continue
-                name, _, value = pair.partition("=")
-                name = name.strip(); value = value.strip()
-                if name == "sp_dc":
-                    if "sp_dc" in current: sets.append(current)
-                    current = {"sp_dc": _decode(value)}
-                elif name in _SPOTIFY_TOKEN_NAMES and len(value) > 5:
-                    current[name] = _decode(value)
-    if "sp_dc" in current: sets.append(current)
-    # 3. Regex fallback — catches bare sp_dc=VALUE anywhere in text
-    existing = {s.get("sp_dc", "") for s in sets}
-    for val in re.findall(r"sp_dc=([A-Za-z0-9%_\-\.~+/=]{20,})", raw):
-        decoded = _decode(val)
-        if decoded not in existing:
-            sets.append({"sp_dc": decoded}); existing.add(decoded)
-    return sets
-
-
 # ── Cookie / token verification ────────────────────────────────────────────────
 
-def verify_web_cookies(netflix_id: str) -> bool:
+def verify_web_cookies(cookie_dict: dict) -> bool:
     """
-    Whitelist approach: visit /browse with allow_redirects=False.
-    Valid cookie  → 200 or redirect to known logged-in path.
-    Expired cookie → redirect to login / locale homepage → NOT in whitelist → False.
+    Valid cookie  → Lands on /browse or /profiles.
+    Expired/Payment required → Redirects to /login or /cleardunning or shows payment update.
     """
     try:
+        # Build cookies dict safely
+        req_cookies = {}
+        for k in ["NetflixId", "SecureNetflixId", "nfvdid", "OptanonConsent"]:
+            if cookie_dict.get(k):
+                req_cookies[k] = cookie_dict[k]
+                
         r = requests.get(
             "https://www.netflix.com/browse",
-            cookies={"NetflixId": netflix_id},
+            cookies=req_cookies,
             headers=_WEB_HEADERS,
             timeout=15,
             verify=False,
-            allow_redirects=False,
+            allow_redirects=True,
         )
-        if r.status_code == 200:
-            return True
-        if r.status_code in (301, 302, 303, 307, 308):
-            location = r.headers.get("Location", "").lower()
-            return any(location.startswith(p) or p in location for p in _LOGGED_IN_PATHS)
-        return False
+        
+        final_url = r.url.lower()
+        html_content = r.text.lower()
+        
+        # Bad paths indicating logout or payment issues
+        # Notice that /it/ or /en/ alone (regional homepage) means we are logged out.
+        # But /it/browse is fine.
+        bad_paths = ["login", "cleardunning", "payment", "update", "dunning", "cancel"]
+        if any(b in final_url for b in bad_paths):
+            return False
+            
+        # If redirected to the base regional homepage (e.g. netflix.com/it/ or netflix.com/it-en/), it means logged out.
+        path_only = urllib.parse.urlparse(r.url).path
+        if re.match(r"^/[a-z]{2}(-[a-z]{2})?/?$", path_only):
+            return False
+            
+        # Bad keywords in HTML (soft-redirects to payment or internal React state showing suspended account)
+        bad_keywords = [
+            "managepaymentinfo", "updateprimarypayment", "aggiornare i dati di pagamento", 
+            "update your payment", "riavvia il tuo abbonamento", "restart your membership",
+            '"membershipstatus":"dunning"', '"membershipstatus":"cancelled"', 
+            '"membershipstatus":"never_member"', '"isnonmember":true',
+            "aggiorna i dati di pagamento", "verifica il tuo metodo di pagamento",
+            '"responseclassification":"denied"', '"isplaybackallowed":false',
+            "zaktualizuj informacje dotyczące płatności", "zaktualizuj metodę płatności"
+        ]
+        if any(k in html_content for k in bad_keywords):
+            return False
+            
+        # Ensure we actually landed on a logged in page
+        return any(p in path_only for p in _LOGGED_IN_PATHS)
     except Exception as exc:
         log.warning("verify_web_cookies error: %s", exc)
         return True   # network error → don't discard
-
-
-def verify_spotify_cookies(cookie_dict: dict) -> bool:
-    """Check if Spotify cookies are valid via open.spotify.com access token endpoint."""
-    sp_dc = cookie_dict.get("sp_dc")
-    if not sp_dc:
-        return False
-    try:
-        cookies = {"sp_dc": sp_dc}
-        if cookie_dict.get("sp_t"):   cookies["sp_t"]   = cookie_dict["sp_t"]
-        if cookie_dict.get("sp_key"): cookies["sp_key"] = cookie_dict["sp_key"]
-        r = requests.get(
-            "https://open.spotify.com/get_access_token",
-            params={"reason": "transport", "productType": "web_player"},
-            cookies=cookies,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
-            timeout=15,
-            verify=False,
-        )
-        if r.status_code != 200:
-            return False
-        return not r.json().get("isAnonymous", True)
-    except Exception as exc:
-        log.warning("verify_spotify_cookies error: %s", exc)
-        return True  # network error → don't discard
-
-
-def generate_spotify_link(cookie_dict: dict) -> str:
-    """Verify Spotify cookie is alive, return base64 bridge token for /sp/<token>."""
-    import base64
-    sp_dc = cookie_dict.get("sp_dc")
-    if not sp_dc:
-        raise RuntimeError("sp_dc cookie mancante.")
-    cookies = {"sp_dc": sp_dc}
-    if cookie_dict.get("sp_t"):   cookies["sp_t"]   = cookie_dict["sp_t"]
-    if cookie_dict.get("sp_key"): cookies["sp_key"] = cookie_dict["sp_key"]
-    r = requests.get(
-        "https://open.spotify.com/get_access_token",
-        params={"reason": "transport", "productType": "web_player"},
-        cookies=cookies,
-        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
-        timeout=15,
-        verify=False,
-    )
-    if r.status_code != 200 or r.json().get("isAnonymous", True):
-        raise RuntimeError("Cookie Spotify non valido o scaduto.")
-    payload = json.dumps({"sp_dc": sp_dc, "ts": datetime.utcnow().isoformat()})
-    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
 
 
 def generate_nftoken(cookie_dict: dict) -> str:
@@ -444,62 +360,6 @@ def static_files(filename):
     return send_from_directory("static", filename)
 
 
-@app.route("/sp/<token>")
-def spotify_bridge(token):
-    """Spotify magic link — decodes bridge token, serves a launch page."""
-    import base64, json as _json
-    try:
-        padded  = token + "=" * (-len(token) % 4)
-        payload = _json.loads(base64.urlsafe_b64decode(padded).decode())
-        sp_dc   = payload.get("sp_dc", "")
-        if not sp_dc:
-            return "Link non valido.", 400
-    except Exception:
-        return "Link non valido.", 400
-
-    html = f"""<!DOCTYPE html>
-<html lang="it">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Kairo · Apri Spotify</title>
-  <style>
-    *{{margin:0;padding:0;box-sizing:border-box}}
-    body{{background:#0a0a0a;color:#fff;font-family:'Inter',sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}}
-    .card{{background:rgba(29,185,84,.08);border:1px solid rgba(29,185,84,.25);border-radius:20px;padding:3rem 2.5rem;max-width:420px;width:90%;text-align:center}}
-    h1{{font-size:1.5rem;font-weight:700;margin:1rem 0 .5rem}}
-    p{{color:#888;font-size:.95rem;margin-bottom:2rem;line-height:1.6}}
-    .btn{{display:block;background:#1DB954;color:#000;font-weight:700;font-size:1rem;padding:.85rem;border-radius:50px;border:none;cursor:pointer;width:100%;margin-bottom:.75rem;transition:all .2s;text-decoration:none}}
-    .btn:hover{{background:#1ed760;transform:translateY(-1px);box-shadow:0 8px 25px rgba(29,185,84,.4)}}
-    .spinner{{width:40px;height:40px;border:3px solid rgba(29,185,84,.2);border-top-color:#1DB954;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 1rem}}
-    @keyframes spin{{to{{transform:rotate(360deg)}}}}
-    #status{{color:#1DB954;font-size:.85rem;margin-top:1rem}}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div style="font-size:3rem">🎵</div>
-    <h1>Kairo · Spotify</h1>
-    <p>Il tuo accesso premium è pronto.<br>Clicca per aprire Spotify!</p>
-    <div class="spinner" id="sp"></div>
-    <button class="btn" id="btn" onclick="launch()">▶ Apri Spotify</button>
-    <div id="status"></div>
-  </div>
-  <script>
-    function launch(){{
-      document.getElementById('sp').style.display='block';
-      document.getElementById('btn').disabled=true;
-      document.getElementById('status').textContent='Apertura in corso...';
-      window.location.href='https://open.spotify.com/';
-    }}
-    setTimeout(()=>document.getElementById('btn').click(),600);
-  </script>
-</body>
-</html>"""
-    return html, 200, {{"Content-Type": "text/html; charset=utf-8"}}
-
-
-
 # ── User API ───────────────────────────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -511,48 +371,48 @@ def api_me():
 @app.route("/api/redeem", methods=["POST"])
 @login_required
 def api_redeem():
-    try:
-        data     = request.get_json(silent=True) or {}
-        key_code = (data.get("key") or "").strip().upper()
+    data     = request.get_json(silent=True) or {}
+    key_code = (data.get("key") or "").strip().upper()
 
-        if not key_code:
-            return jsonify({"error": "Inserisci una key."}), 400
+    if not key_code:
+        return jsonify({"error": "Inserisci una key."}), 400
 
-        key = Key.query.filter_by(key_code=key_code).first()
+    key = Key.query.filter_by(key_code=key_code).first()
 
-        if not key:
-            return jsonify({"error": "Key non trovata."}), 404
-        if key.is_revoked:
-            return jsonify({"error": "Key revocata."}), 400
-        if key.redeemed_by_id is not None:
-            if key.redeemed_by_id == current_user.id:
-                return jsonify({"error": "Hai già riscattato questa key.", "already_yours": True}), 400
-            return jsonify({"error": "Key già utilizzata da un altro utente."}), 400
+    if not key:
+        return jsonify({"error": "Key non trovata."}), 404
+    if key.is_revoked:
+        return jsonify({"error": "Key revocata."}), 400
+    if key.redeemed_by_id is not None:
+        if key.redeemed_by_id == current_user.id:
+            return jsonify({"error": "Hai già riscattato questa key.", "already_yours": True}), 400
+        return jsonify({"error": "Key già utilizzata da un altro utente."}), 400
 
-        # Assign a valid cookie from the pool matching the service, if available
-        cookie = get_valid_cookie_for_key(key)
+    # Assign a valid cookie from the pool
+    used_ids = db.session.query(Key.cookie_id).filter(
+        Key.cookie_id.isnot(None), Key.is_revoked == False
+    ).subquery()
+    cookie = CookiePool.query.filter(
+        CookiePool.is_valid == True,
+        ~CookiePool.id.in_(used_ids),
+    ).first()
 
-        key.redeemed_by_id = current_user.id
-        key.redeemed_at    = datetime.utcnow()
-        db.session.commit()
+    if not cookie:
+        return jsonify({"error": "Nessun cookie disponibile al momento. Riprova tra poco."}), 503
 
-        return jsonify({"success": True})
-    except Exception as e:
-        import traceback
-        db.session.rollback()
-        return jsonify({"error": "CRASH REDEEM: " + str(e), "trace": traceback.format_exc()}), 500
+    key.redeemed_by_id = current_user.id
+    key.redeemed_at    = datetime.utcnow()
+    key.cookie_id      = cookie.id
+    db.session.commit()
+
+    return jsonify({"success": True})
 
 
 @app.route("/api/my-keys")
 @login_required
 def api_my_keys():
-    try:
-        keys = Key.query.filter_by(redeemed_by_id=current_user.id, is_revoked=False).all()
-        return jsonify([k.to_dict() for k in keys])
-    except Exception as e:
-        import traceback
-        err_msg = str(e) + "\n" + traceback.format_exc()
-        return jsonify({"error": "CRASH INTERNO: " + str(e), "trace": err_msg}), 500
+    keys = Key.query.filter_by(redeemed_by_id=current_user.id, is_revoked=False).all()
+    return jsonify([k.to_dict() for k in keys])
 
 
 @app.route("/api/generate-link", methods=["POST"])
@@ -567,40 +427,18 @@ def api_generate_link():
     if key.is_revoked:
         return jsonify({"error": "Key revocata."}), 400
 
-    svc = key.service or "netflix"
-
-    # ── Spotify branch (new) ──────────────────────────────────────────────────
-    if svc == "spotify":
-        for attempt in range(3):
-            cookie = get_valid_cookie_for_key(key)
-            if not cookie:
-                return jsonify({"error": "Nessun account Spotify disponibile. Contatta l'admin."}), 503
-            try:
-                sp_token = generate_spotify_link(cookie.to_cookie_dict())
-                cookie.last_checked_at = datetime.utcnow()
-                cookie.is_valid = True
-                db.session.commit()
-                base = request.host_url.rstrip("/")
-                return jsonify({
-                    "url":       f"{base}/sp/{sp_token}",
-                    "service":   "spotify",
-                    "timestamp": datetime.utcnow().isoformat(),
-                })
-            except Exception as e:
-                log.warning("Spotify link attempt %s failed for cookie #%s: %s", attempt+1, cookie.id, e)
-                cookie.is_valid = False
-                cookie.last_checked_at = datetime.utcnow()
-                db.session.commit()
-        return jsonify({"error": "I cookie Spotify collegati sono scaduti. Contatta l'assistenza."}), 503
-
-    # ── Netflix branch (untouched) ────────────────────────────────────────────
     token = None
+    # Auto-rotate up to 3 cookies if one fails
     for attempt in range(3):
         cookie = get_valid_cookie_for_key(key)
         if not cookie:
             return jsonify({"error": "Nessun account Netflix disponibile al momento. Contatta l'admin."}), 503
 
         try:
+            # First, verify if the cookie is actually still logged in on Netflix
+            if not verify_web_cookies(cookie.to_cookie_dict()):
+                raise Exception("Cookie scaduto (Netflix richiede il login)")
+                
             raw_token = generate_nftoken(cookie.to_cookie_dict())
             cookie.last_checked_at = datetime.utcnow()
             cookie.is_valid = True
@@ -617,19 +455,14 @@ def api_generate_link():
         return jsonify({"error": "I cookie collegati a questa key sono scaduti. Contatta l'assistenza per caricare nuovi cookie."}), 503
 
     encoded_token = urllib.parse.quote(token, safe="")
-    pc_url      = "https://www.netflix.com/youraccount?nftoken=" + encoded_token
-    ios_url     = "https://www.netflix.com/youraccount?nftoken=" + encoded_token
-    ios_app_url = "https://www.netflix.com/browse?nftoken=" + encoded_token
-    android_url = "https://www.netflix.com/unsupported?nftoken=" + encoded_token
-
+    universal_url = f"https://www.netflix.com/browse?nftoken={encoded_token}"
+    
     return jsonify({
-        "url":         pc_url,
-        "ios_url":     ios_url,
-        "ios_app_url": ios_app_url,
-        "android_url": android_url,
-        "token":       token,
-        "service":     "netflix",
-        "timestamp":   datetime.utcnow().isoformat()
+        "url": universal_url,
+        "ios_url": universal_url,
+        "android_url": universal_url,
+        "token": token,
+        "timestamp": datetime.utcnow().isoformat()
     })
 
 
@@ -644,6 +477,15 @@ def api_admin_stats():
     total_cookies = CookiePool.query.count()
     valid_cookies = CookiePool.query.filter_by(is_valid=True).count()
 
+    used_ids = db.session.query(Key.cookie_id).filter(
+        Key.cookie_id.isnot(None), Key.is_revoked == False
+    ).subquery()
+    
+    free_valid_cookies = CookiePool.query.filter(
+        CookiePool.is_valid == True,
+        ~CookiePool.id.in_(used_ids)
+    ).count()
+
     return jsonify({
         "total_keys":    total_keys,
         "available_keys": available,
@@ -651,6 +493,7 @@ def api_admin_stats():
         "revoked_keys":  total_keys - available - redeemed,
         "total_cookies": total_cookies,
         "valid_cookies": valid_cookies,
+        "free_valid_cookies": free_valid_cookies,
     })
 
 
@@ -683,23 +526,21 @@ def api_admin_set_admin():
 @app.route("/api/admin/generate-keys", methods=["POST"])
 @admin_required
 def api_admin_generate_keys():
-    data    = request.get_json(silent=True) or {}
-    count   = min(int(data.get("count", 1)), 500)
-    service = data.get("service", "netflix")
-    if service not in ("netflix", "spotify"):
-        service = "netflix"
+    data  = request.get_json(silent=True) or {}
+    count = min(int(data.get("count", 1)), 500)  # max 500 per volta
 
     new_keys = []
     for _ in range(count):
         code = generate_key_code()
+        # Ensure uniqueness
         while Key.query.filter_by(key_code=code).first():
             code = generate_key_code()
-        k = Key(key_code=code, service=service)
+        k = Key(key_code=code)
         db.session.add(k)
         new_keys.append(code)
 
     db.session.commit()
-    return jsonify({"keys": new_keys, "count": len(new_keys), "service": service})
+    return jsonify({"keys": new_keys, "count": len(new_keys)})
 
 
 @app.route("/api/admin/keys")
@@ -733,7 +574,7 @@ def api_admin_revoke_key():
     if not key:
         return jsonify({"error": "Key non trovata."}), 404
 
-    key.is_revoked = True
+    db.session.delete(key)
     db.session.commit()
     return jsonify({"success": True})
 
@@ -741,58 +582,34 @@ def api_admin_revoke_key():
 @app.route("/api/admin/parse-cookies", methods=["POST"])
 @admin_required
 def api_admin_parse_cookies():
-    data    = request.get_json(silent=True) or {}
-    raw     = (data.get("cookie") or "").strip()
-    service = data.get("service", "netflix")
+    data = request.get_json(silent=True) or {}
+    raw  = (data.get("cookie") or "").strip()
 
     if not raw:
         return jsonify({"error": "Nessun cookie fornito."}), 400
 
-    if service == "spotify":
-        cookie_sets = extract_spotify_cookie_sets(raw)
-    else:
-        cookie_sets = extract_all_cookie_sets(raw)   # Netflix — untouched
-
+    cookie_sets = extract_all_cookie_sets(raw)
     return jsonify({"cookie_sets": cookie_sets})
 
 
 @app.route("/api/admin/validate-cookie", methods=["POST"])
 @admin_required
 def api_admin_validate_cookie():
-    cs      = request.get_json(silent=True) or {}
-    service = cs.pop("service", "netflix")
-
-    # ── Spotify path (new) ────────────────────────────────────────────────────
-    if service == "spotify":
-        sp_dc = cs.get("sp_dc", "")
-        if not sp_dc:
-            return jsonify({"status": "invalid"})
-        if CookiePool.query.filter_by(sp_dc=sp_dc).first():
-            return jsonify({"status": "skipped"})
-        if not verify_spotify_cookies(cs):
-            return jsonify({"status": "invalid"})
-        entry = CookiePool(
-            service  = "spotify",
-            sp_dc    = sp_dc,
-            sp_t     = cs.get("sp_t"),
-            sp_key   = cs.get("sp_key"),
-            is_valid = True,
-            last_checked_at = datetime.utcnow(),
-        )
-        db.session.add(entry)
-        db.session.commit()
-        return jsonify({"status": "added"})
-
-    # ── Netflix path (untouched) ───────────────────────────────────────────────
+    cs = request.get_json(silent=True) or {}
     netflix_id = cs.get("NetflixId", "")
+
     if not netflix_id:
         return jsonify({"status": "invalid"})
+
+    # Check for duplicate
     if CookiePool.query.filter_by(netflix_id=netflix_id).first():
         return jsonify({"status": "skipped"})
-    if not verify_web_cookies(netflix_id):
+
+    # Verify the cookie is actually valid
+    if not verify_web_cookies(cs):
         return jsonify({"status": "invalid"})
+
     entry = CookiePool(
-        service           = "netflix",
         netflix_id        = netflix_id,
         secure_netflix_id = cs.get("SecureNetflixId"),
         nfvdid            = cs.get("nfvdid"),
@@ -802,8 +619,28 @@ def api_admin_validate_cookie():
     )
     db.session.add(entry)
     db.session.commit()
+
     return jsonify({"status": "added"})
 
+
+@app.route("/api/admin/clean-cookies", methods=["POST"])
+@admin_required
+def api_admin_clean_cookies():
+    import threading
+    def _verify_all_cookies():
+        with app.app_context():
+            cookies = CookiePool.query.filter_by(is_valid=True).all()
+            for cookie in cookies:
+                try:
+                    if not verify_web_cookies(cookie.to_cookie_dict()):
+                        cookie.is_valid = False
+                        cookie.last_checked_at = datetime.utcnow()
+                        db.session.commit()
+                except Exception:
+                    pass
+
+    threading.Thread(target=_verify_all_cookies).start()
+    return jsonify({"success": True, "message": "Verifica in background avviata."})
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
