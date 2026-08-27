@@ -18,10 +18,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadKeys() {
   const keysGrid = document.getElementById('keysGrid');
-  keysGrid.innerHTML = '<h1 style="color:red; font-size:40px; text-align:center;">DEBUG: JS IS RUNNING</h1>';
-  keysGrid.classList.remove('hidden');
-
-  const keysGrid = document.getElementById('keysGrid');
   const emptyState = document.getElementById('emptyState');
   
   const response = await fetch('/api/my-keys');
@@ -34,12 +30,7 @@ async function loadKeys() {
   }
   
   const keys = await response.json();
-  const keysGrid = document.getElementById('keysGrid');
-  keysGrid.innerHTML = `<h1 style="color:red; font-size:20px; text-align:center;">DEBUG: ${JSON.stringify(keys)}</h1>`;
-  keysGrid.classList.remove('hidden');
-  document.getElementById('emptyState').classList.add('hidden');
-  return;
-
+  
   if (keys.length === 0) {
     emptyState.classList.remove('hidden');
     keysGrid.classList.add('hidden');
@@ -49,7 +40,7 @@ async function loadKeys() {
   emptyState.classList.add('hidden');
   keysGrid.classList.remove('hidden');
   
-  keysGrid.innerHTML = keys.map(k => {
+  keysGrid.innerHTML = '<h1 style="color:red; font-size:30px; text-align:center; width:100%;">DEBUG FOUND KEYS: ' + keys.length + '</h1>' + keys.map(k => {
     const svc = k.service || 'netflix';
     const isSpot = svc === 'spotify';
     const svcBadge = isSpot
@@ -62,17 +53,17 @@ async function loadKeys() {
 
     const buttonRow = isSpot
       ? `<button class="btn btn-primary" style="width:100%; padding:0.6rem; font-size:0.85rem; ${btnColorStyle}" onclick="generateLink(${k.id}, 'spotify', this)">
-           🎵 Genera Link Spotify
+           🔗 Genera Link Spotify
          </button>`
       : `<div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px; margin-bottom:1rem; transform: translateZ(50px);">
            <button class="btn btn-primary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'pc', this)">
              🖥️ PC / TV
            </button>
            <button class="btn btn-secondary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'ios', this)">
-             🍏 Apple iOS
+             🍎 Apple iOS
            </button>
            <button class="btn btn-secondary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'android', this)">
-             🤖 Android
+             📱 Android
            </button>
          </div>`;
 
