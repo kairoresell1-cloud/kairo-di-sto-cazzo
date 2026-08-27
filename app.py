@@ -61,20 +61,24 @@ init_oauth(app)
 with app.app_context():
     db.create_all()
     
-    # Auto-migration per aggiungere le nuove colonne (SQLite o PostgreSQL)
+    # Auto-migration per aggiungere le nuove colonne in modo sicuro
     from sqlalchemy import text
-    try:
-        # Aggiungiamo service a cookies_pool
-        db.session.execute(text("ALTER TABLE cookies_pool ADD COLUMN service VARCHAR(20) DEFAULT 'netflix'"))
-        db.session.execute(text("ALTER TABLE cookies_pool ADD COLUMN sp_dc VARCHAR(1000)"))
-        db.session.execute(text("ALTER TABLE cookies_pool ADD COLUMN sp_t VARCHAR(1000)"))
-        db.session.execute(text("ALTER TABLE cookies_pool ADD COLUMN sp_key VARCHAR(1000)"))
-    except Exception:
-        db.session.rollback()
+    columns_to_add_cookies = [
+        "service VARCHAR(20) DEFAULT 'netflix'",
+        "sp_dc VARCHAR(1000)",
+        "sp_t VARCHAR(1000)",
+        "sp_key VARCHAR(1000)"
+    ]
+    for col in columns_to_add_cookies:
+        try:
+            db.session.execute(text(f"ALTER TABLE cookies_pool ADD COLUMN {col}"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     try:
-        # Aggiungiamo service a keys
         db.session.execute(text("ALTER TABLE keys ADD COLUMN service VARCHAR(20) DEFAULT 'netflix'"))
+        db.session.commit()
     except Exception:
         db.session.rollback()
         
