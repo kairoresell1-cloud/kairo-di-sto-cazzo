@@ -21,14 +21,7 @@ async function loadKeys() {
   const emptyState = document.getElementById('emptyState');
   
   const response = await fetch('/api/my-keys');
-  if (!response.ok) {
-    const errData = await response.json().catch(()=>({}));
-    const errMsg = errData.error || 'Server error loading keys';
-    emptyState.classList.remove('hidden');
-    emptyState.innerHTML = `<p style="color:var(--error); font-size:1.2rem; font-weight:bold;">${errMsg}</p>`;
-    return;
-  }
-  
+  if (!response.ok) return;
   const keys = await response.json();
   
   if (keys.length === 0) {
@@ -40,32 +33,36 @@ async function loadKeys() {
   emptyState.classList.add('hidden');
   keysGrid.classList.remove('hidden');
   
-  keysGrid.innerHTML = '<h1 style="color:red; font-size:30px; text-align:center; width:100%;">DEBUG FOUND KEYS: ' + keys.length + '</h1>' + keys.map(k => {
+  keysGrid.innerHTML = keys.map(k => {
     const svc = k.service || 'netflix';
     const isSpot = svc === 'spotify';
     const svcBadge = isSpot
-      ? `<span class="badge-spotify" style="font-size:0.7rem;">🎵 Spotify</span>`
-      : `<span class="badge-netflix" style="font-size:0.7rem;">🎬 Netflix</span>`;
+      ? `<span class="badge-spotify" style="font-size:0.7rem; color:#1DB954; font-weight:bold;">🎵 Spotify</span>`
+      : `<span class="badge-netflix" style="font-size:0.7rem; color:#e50914; font-weight:bold;">🎬 Netflix</span>`;
     const accentColor   = isSpot ? '#1DB954' : 'rgba(229,9,20,0.3)';
-    const btnColorStyle = isSpot
-      ? `background:rgba(29,185,84,0.15); border-color:#1DB954; color:#1DB954;`
-      : '';
-
-    const buttonRow = isSpot
-      ? `<button class="btn btn-primary" style="width:100%; padding:0.6rem; font-size:0.85rem; ${btnColorStyle}" onclick="generateLink(${k.id}, 'spotify', this)">
-           🔗 Genera Link Spotify
-         </button>`
-      : `<div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px; margin-bottom:1rem; transform: translateZ(50px);">
-           <button class="btn btn-primary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'pc', this)">
-             🖥️ PC / TV
-           </button>
-           <button class="btn btn-secondary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'ios', this)">
-             🍎 Apple iOS
-           </button>
-           <button class="btn btn-secondary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'android', this)">
-             📱 Android
-           </button>
-         </div>`;
+    
+    let buttonRow = '';
+    if (isSpot) {
+      buttonRow = `
+        <button class="btn btn-primary" style="width:100%; padding:0.75rem; font-size:0.9rem; font-weight:700; display:flex; align-items:center; justify-content:center; gap:8px; box-shadow: 0 4px 15px rgba(29,185,84,0.4); background:rgba(29,185,84,0.15); border-color:#1DB954; color:#1DB954;" onclick="generateLink(${k.id}, 'spotify', this)">
+          🔗 GENERA LINK SPOTIFY
+        </button>
+      `;
+    } else {
+      buttonRow = `
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px;">
+          <button class="btn btn-primary" style="padding:0.6rem 0.2rem; font-size:0.8rem; box-shadow: 0 4px 15px rgba(229,9,20,0.4);" onclick="generateLink(${k.id}, 'pc', this)">
+            🖥️ PC
+          </button>
+          <button class="btn btn-secondary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'ios', this)">
+            🍎 iOS
+          </button>
+          <button class="btn btn-secondary" style="padding:0.6rem 0.2rem; font-size:0.8rem;" onclick="generateLink(${k.id}, 'android', this)">
+            📱 Android
+          </button>
+        </div>
+      `;
+    }
 
     return `
     <div class="ticket-card" id="key-card-${k.id}">
@@ -98,7 +95,7 @@ async function loadKeys() {
       </div>
     </div>
   `}).join('');
-
+  
   // Inizializza l'effetto 3D Glass
   if (window.VanillaTilt) {
     VanillaTilt.init(document.querySelectorAll(".ticket-card"), {
@@ -111,11 +108,26 @@ async function loadKeys() {
   }
 }
 
-window.generateLink = async function(id, type, btnElem) {
+function maskKey(key) {
+  if(!key || key.length < 15) return 'KAIRO-****-****-****';
+  const parts = key.split('-');
+  return `${parts[0]}-****-****-${parts[3]}`;
+}
+
+window.toggleKey = function(id, fullKey) {
+  const display = document.getElementById(`key-display-${id}`);
+  if (display.innerText.includes('****')) {
+    display.innerText = fullKey;
+  } else {
+    display.innerText = maskKey(fullKey);
+  }
+}
+
+window.generateLink = async function(id, btnElem) {
   const originalHtml = btnElem ? btnElem.innerHTML : '';
   if (btnElem) {
     btnElem.disabled = true;
-    btnElem.innerHTML = '⏳ Generando...';
+    btnElem.innerHTML = '⏳ Generando Link...';
   }
   
   const linkContainer = document.getElementById(`link-container-${id}`);
@@ -127,65 +139,28 @@ window.generateLink = async function(id, type, btnElem) {
       showToast(res.error, 'error');
       return;
     }
-
-    // ── Spotify ──────────────────────────────────────────────────────────────
-    if (res.service === 'spotify') {
-      const url = res.url;
-      if (!url) { showToast('Errore generazione link', 'error'); return; }
-      linkContainer.innerHTML = `
-        <div style="font-size:0.75rem; color:#1DB954; margin-bottom:6px; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
-          <span>🎵 LINK SPOTIFY (UNIVERSALE)</span>
-          <span style="color:var(--text-muted); font-size:0.7rem;">Live Token</span>
-        </div>
-        <div style="background:rgba(0,0,0,0.5); padding:8px; border-radius:6px; font-family:monospace; font-size:0.8rem; word-break:break-all; margin-bottom:10px; border:1px solid rgba(255,255,255,0.05); color:#fff;">
-          ${url}
-        </div>
-        <div style="display:flex; gap:8px;">
-          <button class="btn btn-primary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="copyToClipboard('${url}')">📋 Copia Link</button>
-          <button class="btn btn-secondary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="window.location.href='${url}'">🎵 Apri Spotify</button>
-        </div>
-      `;
-      linkContainer.classList.remove('hidden');
-      showToast('🎵 Link Spotify pronto!', 'success');
+    
+    const url = res.url;
+    if (!url) {
+      showToast('Errore generazione link', 'error');
       return;
     }
-
-    // ── Netflix (untouched) ───────────────────────────────────────────────────
-    let url = res.url;
-    let label = '🖥️ PC / SmartTV';
-    let isIOS = false;
-    
-    if (type === 'ios') {
-      url = res.ios_url || res.url;
-      label = '🍏 Apple iOS (Safari Web)';
-      isIOS = true;
-    } else if (type === 'android') {
-      url = res.android_url || res.url;
-      label = '🤖 Android';
-    }
-    
-    if (!url) { showToast('Errore generazione link', 'error'); return; }
     
     linkContainer.innerHTML = `
       <div style="font-size:0.75rem; color:var(--accent-gold); margin-bottom:6px; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
-        <span>✨ LINK FRESCO (${label})</span>
+        <span>✨ LINK NETFLIX (UNIVERSALE)</span>
         <span style="color:var(--text-muted); font-size:0.7rem;">Live Token</span>
       </div>
       <div style="background:rgba(0,0,0,0.5); padding:8px; border-radius:6px; font-family:monospace; font-size:0.8rem; word-break:break-all; margin-bottom:10px; border:1px solid rgba(255,255,255,0.05); color:#fff;">
         ${url}
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="btn btn-primary" style="flex:1; min-width:120px; padding:0.5rem; font-size:0.8rem;" onclick="copyToClipboard('${url}')">
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-primary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="copyToClipboard('${url}')">
           📋 Copia Link
         </button>
-        <a href="${url}" target="_blank" class="btn btn-secondary" style="flex:1; min-width:120px; padding:0.5rem; font-size:0.8rem; text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center;">
+        <button class="btn btn-secondary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="openNetflixLink('${url}')">
           🚀 Apri Subito
-        </a>
-        ${isIOS && res.ios_app_url ? `
-          <a href="${res.ios_app_url}" target="_blank" class="btn btn-secondary" style="flex:100%; margin-top:4px; padding:0.45rem; font-size:0.75rem; text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center; border-color:rgba(255,215,0,0.4); color:var(--accent-gold);">
-            📱 Apri direttamente nell'App Netflix
-          </a>
-        ` : ''}
+        </button>
       </div>
     `;
     linkContainer.classList.remove('hidden');
@@ -200,5 +175,10 @@ window.generateLink = async function(id, type, btnElem) {
     }
   }
 }
+
+window.openNetflixLink = function(url) {
+  // Triggers native iOS/Android App Universal Link without opening blank web tab
+  window.location.href = url;
+};
 
 
