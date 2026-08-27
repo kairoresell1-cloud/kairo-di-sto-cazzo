@@ -64,7 +64,7 @@ def unauthorized():
     session["login_next"] = request.url
     return redirect("/auth/login")
 
-app.register_blueprint(auth_bp)
+app.register_blueprint(auth_bp, url_prefix="/auth")
 init_oauth(app)
 
 with app.app_context():

@@ -18,6 +18,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadKeys() {
   const keysGrid = document.getElementById('keysGrid');
+  keysGrid.innerHTML = '<h1 style="color:red; font-size:40px; text-align:center;">DEBUG: JS IS RUNNING</h1>';
+  keysGrid.classList.remove('hidden');
+
+  const keysGrid = document.getElementById('keysGrid');
   const emptyState = document.getElementById('emptyState');
   
   const response = await fetch('/api/my-keys');
@@ -30,15 +34,13 @@ async function loadKeys() {
   }
   
   const keys = await response.json();
-  
-  // FORCE DEBUG TO SCREEN
-  document.getElementById('welcomeMsg').innerHTML = `DEBUG: response ok, keys length = ${keys.length}`;
-  if (keys.length === 0) {
-    emptyState.classList.remove('hidden');
-    keysGrid.classList.add('hidden');
-    return;
-  }
+  const keysGrid = document.getElementById('keysGrid');
+  keysGrid.innerHTML = `<h1 style="color:red; font-size:20px; text-align:center;">DEBUG: ${JSON.stringify(keys)}</h1>`;
+  keysGrid.classList.remove('hidden');
+  document.getElementById('emptyState').classList.add('hidden');
+  return;
 
+  if (keys.length === 0) {
     emptyState.classList.remove('hidden');
     keysGrid.classList.add('hidden');
     return;
