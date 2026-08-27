@@ -70,28 +70,6 @@ init_oauth(app)
 with app.app_context():
     db.create_all()
 
-    # Auto-migration per Spotify
-    from sqlalchemy import text
-    columns_to_add_cookies = [
-        "service VARCHAR(20) DEFAULT 'netflix'",
-        "sp_dc VARCHAR(1000)",
-        "sp_t VARCHAR(1000)",
-        "sp_key VARCHAR(1000)"
-    ]
-    for col in columns_to_add_cookies:
-        try:
-            db.session.execute(text(f"ALTER TABLE cookies_pool ADD COLUMN {col}"))
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-
-    try:
-        db.session.execute(text("ALTER TABLE keys ADD COLUMN service VARCHAR(20) DEFAULT 'netflix'"))
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-
-
 # ── Netflix iOS API constants ───────────────────────────────────────────────────
 _TOKEN_NAMES = {"NetflixId", "SecureNetflixId", "nfvdid", "OptanonConsent"}
 _REQUIRED    = {"NetflixId"}
@@ -407,10 +385,9 @@ def api_redeem():
         return jsonify({"error": "Key revocata."}), 400
     if key.redeemed_by_id is not None:
         if key.redeemed_by_id == current_user.id:
-            return jsonify({"error": "Hai gia riscattato questa key.", "already_yours": True}), 400
-        return jsonify({"error": "Key gia utilizzata da un altro utente."}), 400
+            return jsonify({"error": "Hai già riscattato questa key.", "already_yours": True}), 400
+        return jsonify({"error": "Key già utilizzata da un altro utente."}), 400
 
-    # Assign a valid cookie from the pool
     cookie = get_valid_cookie_for_key(key)
 
     key.redeemed_by_id = current_user.id
@@ -423,71 +400,196 @@ def api_redeem():
 @app.route("/api/my-keys")
 @login_required
 def api_my_keys():
-    try:
-        keys = Key.query.filter_by(redeemed_by_id=current_user.id, is_revoked=False).all()
-        return jsonify([k.to_dict() for k in keys])
-    except Exception as e:
-        import traceback
-        return jsonify({"error": "CRASH DB (my-keys): " + str(e), "trace": traceback.format_exc()}), 500
+    keys = Key.query.filter_by(redeemed_by_id=current_user.id, is_revoked=False).all()
+    return jsonify([k.to_dict() for k in keys])
 
 
 @app.route("/api/generate-link", methods=["POST"])
 @login_required
 def api_generate_link():
-    data     = request.get_json(silent=True) or {}
-    key_code = (data.get("key") or "").strip().upper()
+    data   = request.get_json(silent=True) or {}
+    key_id = data.get("key_id")
 
-    if not key_code:
-        return jsonify({"error": "Inserisci una key."}), 400
-
-    key = Key.query.filter_by(key_code=key_code).first()
-
-    if not key:
-        return jsonify({"error": "Key non trovata."}), 404
+    key = Key.query.get(key_id)
+    if not key or key.redeemed_by_id != current_user.id:
+        return jsonify({"error": "Key non valida."}), 404
     if key.is_revoked:
         return jsonify({"error": "Key revocata."}), 400
-    if key.redeemed_by_id is not None:
-        if key.redeemed_by_id == current_user.id:
-            return jsonify({"error": "Hai gia riscattato questa key.", "already_yours": True}), 400
-        return jsonify({"error": "Key gia utilizzata da un altro utente."}), 400
 
-    # Assign a valid cookie from the pool
-    cookie = get_valid_cookie_for_key(key)
+    svc = key.service or "netflix"
+    if svc == "spotify":
+        for attempt in range(3):
+            cookie = get_valid_cookie_for_key(key)
+            if not cookie:
+                return jsonify({"error": "Nessun account Spotify disponibile. Contatta l'admin."}), 503
+            try:
+                sp_token = generate_spotify_link(cookie.to_cookie_dict())
+                cookie.last_checked_at = datetime.utcnow()
+                cookie.is_valid = True
+                db.session.commit()
+                base = request.host_url.rstrip("/")
+                return jsonify({
+                    "url":       f"{base}/sp/{sp_token}",
+                    "service":   "spotify",
+                    "timestamp": datetime.utcnow().isoformat(),
+                })
+            except Exception as e:
+                cookie.is_valid = False
+                cookie.last_checked_at = datetime.utcnow()
+                db.session.commit()
+                if attempt == 2:
+                    return jsonify({"error": "Account fallito. Riprova o contatta l'admin."}), 500
+        return jsonify({"error": "Impossibile generare il link."})
 
-    key.redeemed_by_id = current_user.id
-    key.redeemed_at    = datetime.utcnow()
+    token = None
+    # Auto-rotate up to 3 cookies if one fails
+    for attempt in range(3):
+        cookie = get_valid_cookie_for_key(key)
+        if not cookie:
+            return jsonify({"error": "Nessun account Netflix disponibile al momento. Contatta l'admin."}), 503
+
+        try:
+            # First, verify if the cookie is actually still logged in on Netflix
+            if not verify_web_cookies(cookie.to_cookie_dict()):
+                raise Exception("Cookie scaduto (Netflix richiede il login)")
+                
+            raw_token = generate_nftoken(cookie.to_cookie_dict())
+            cookie.last_checked_at = datetime.utcnow()
+            cookie.is_valid = True
+            db.session.commit()
+            token = raw_token
+            break
+        except Exception as e:
+            log.warning("Tentativo %s: generate_nftoken fallito per cookie #%s: %s", attempt + 1, cookie.id, e)
+            cookie.is_valid = False
+            cookie.last_checked_at = datetime.utcnow()
+            db.session.commit()
+
+    if not token:
+        return jsonify({"error": "I cookie collegati a questa key sono scaduti. Contatta l'assistenza per caricare nuovi cookie."}), 503
+
+    encoded_token = urllib.parse.quote(token, safe="")
+    universal_url = f"https://www.netflix.com/browse?nftoken={encoded_token}"
+    
+    return jsonify({
+        "url": universal_url,
+        "ios_url": universal_url,
+        "android_url": universal_url,
+        "token": token,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+
+
+# ── Admin API ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/admin/stats")
+@admin_required
+def api_admin_stats():
+    total_keys    = Key.query.count()
+    available     = Key.query.filter_by(is_revoked=False).filter(Key.redeemed_by_id.is_(None)).count()
+    redeemed      = Key.query.filter(Key.redeemed_by_id.isnot(None), Key.is_revoked == False).count()
+    total_cookies = CookiePool.query.count()
+    valid_cookies = CookiePool.query.filter_by(is_valid=True).count()
+
+    used_ids = db.session.query(Key.cookie_id).filter(
+        Key.cookie_id.isnot(None), Key.is_revoked == False
+    ).subquery()
+    
+    free_valid_cookies = CookiePool.query.filter(
+        CookiePool.is_valid == True,
+        ~CookiePool.id.in_(used_ids)
+    ).count()
+
+    return jsonify({
+        "total_keys":    total_keys,
+        "available_keys": available,
+        "redeemed_keys": redeemed,
+        "revoked_keys":  total_keys - available - redeemed,
+        "total_cookies": total_cookies,
+        "valid_cookies": valid_cookies,
+        "free_valid_cookies": free_valid_cookies,
+    })
+
+
+@app.route("/api/admin/users")
+@owner_required
+def api_admin_users():
+    users = User.query.order_by(User.created_at.desc()).all()
+    return jsonify({"users": [u.to_dict() for u in users]})
+
+
+@app.route("/api/admin/set-admin", methods=["POST"])
+@owner_required
+def api_admin_set_admin():
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("user_id")
+    is_admin = bool(data.get("is_admin"))
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "Utente non trovato."}), 404
+        
+    if user.is_owner:
+        return jsonify({"error": "Non puoi modificare i permessi dell'owner."}), 400
+
+    user.is_admin = is_admin
     db.session.commit()
-
     return jsonify({"success": True})
 
 
 @app.route("/api/admin/generate-keys", methods=["POST"])
 @admin_required
 def api_admin_generate_keys():
-    data     = request.get_json(silent=True) or {}
-    key_code = (data.get("key") or "").strip().upper()
+    data  = request.get_json(silent=True) or {}
+    count = min(int(data.get("count", 1)), 500)
+    service = data.get("service", "netflix")
 
-    if not key_code:
-        return jsonify({"error": "Inserisci una key."}), 400
+    new_keys = []
+    for _ in range(count):
+        code = generate_key_code()
+        while Key.query.filter_by(key_code=code).first():
+            code = generate_key_code()
+        k = Key(key_code=code, service=service)
+        db.session.add(k)
+        new_keys.append(code)
 
-    key = Key.query.filter_by(key_code=key_code).first()
+    db.session.commit()
+    return jsonify({"keys": new_keys, "count": len(new_keys)})
 
+
+@app.route("/api/admin/keys")
+@admin_required
+def api_admin_keys():
+    q    = request.args.get("q", "").strip()
+    page = int(request.args.get("page", 1))
+    per_page = 50
+
+    query = Key.query
+    if q:
+        query = query.filter(Key.key_code.ilike(f"%{q}%"))
+
+    total = query.count()
+    keys  = query.order_by(Key.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+
+    return jsonify({
+        "keys":  [k.to_dict(include_user=True) for k in keys],
+        "total": total,
+        "page":  page,
+    })
+
+
+@app.route("/api/admin/revoke-key", methods=["POST"])
+@admin_required
+def api_admin_revoke_key():
+    data   = request.get_json(silent=True) or {}
+    key_id = data.get("key_id")
+
+    key = Key.query.get(key_id)
     if not key:
         return jsonify({"error": "Key non trovata."}), 404
-    if key.is_revoked:
-        return jsonify({"error": "Key revocata."}), 400
-    if key.redeemed_by_id is not None:
-        if key.redeemed_by_id == current_user.id:
-            return jsonify({"error": "Hai gia riscattato questa key.", "already_yours": True}), 400
-        return jsonify({"error": "Key gia utilizzata da un altro utente."}), 400
 
-    # Assign a valid cookie from the pool
-    cookie = get_valid_cookie_for_key(key)
-
-    key.redeemed_by_id = current_user.id
-    key.redeemed_at    = datetime.utcnow()
+    db.session.delete(key)
     db.session.commit()
-
     return jsonify({"success": True})
 
 
@@ -495,44 +597,74 @@ def api_admin_generate_keys():
 @admin_required
 def api_admin_parse_cookies():
     data = request.get_json(silent=True) or {}
-    raw  = (data.get("cookie") or "").strip()
+    raw_text = (data.get("cookie") or data.get("cookies") or "").strip()
+    service = data.get("service", "netflix")
 
-    if not raw:
+    if not raw_text:
         return jsonify({"error": "Nessun cookie fornito."}), 400
 
-    cookie_sets = extract_all_cookie_sets(raw)
-    return jsonify({"cookie_sets": cookie_sets})
+    if service == "spotify":
+        sets = extract_spotify_cookie_sets(raw_text)
+    else:
+        sets = extract_cookie_sets(raw_text) if 'extract_all_cookie_sets' not in globals() else extract_all_cookie_sets(raw_text)
+    return jsonify({"cookie_sets": sets})
 
 
 @app.route("/api/admin/validate-cookie", methods=["POST"])
 @admin_required
 def api_admin_validate_cookie():
-    cs = request.get_json(silent=True) or {}
-    netflix_id = cs.get("NetflixId", "")
-
-    if not netflix_id:
+    data = request.get_json(silent=True) or {}
+    cs   = data.get("cookie_set") or data
+    service = data.get("service", "netflix")
+    
+    if not cs:
         return jsonify({"status": "invalid"})
 
-    # Check for duplicate
-    if CookiePool.query.filter_by(netflix_id=netflix_id).first():
-        return jsonify({"status": "skipped"})
+    if service == "spotify":
+        sp_dc = cs.get("sp_dc", "")
+        if not sp_dc:
+            return jsonify({"status": "invalid"})
+        if CookiePool.query.filter_by(sp_dc=sp_dc).first():
+            return jsonify({"status": "skipped"})
+        if not verify_spotify_cookies(cs):
+            return jsonify({"status": "invalid"})
+        entry = CookiePool(
+            service  = "spotify",
+            sp_dc    = sp_dc,
+            sp_t     = cs.get("sp_t"),
+            sp_key   = cs.get("sp_key"),
+            is_valid = True,
+            last_checked_at = datetime.utcnow(),
+        )
+        db.session.add(entry)
+        db.session.commit()
+        return jsonify({"status": "added"})
+    else:
+        netflix_id = cs.get("NetflixId", "")
+        if not netflix_id:
+            return jsonify({"status": "invalid"})
 
-    # Verify the cookie is actually valid
-    if not verify_web_cookies(cs):
-        return jsonify({"status": "invalid"})
+        # Check for duplicate
+        if CookiePool.query.filter_by(netflix_id=netflix_id).first():
+            return jsonify({"status": "skipped"})
 
-    entry = CookiePool(
-        netflix_id        = netflix_id,
-        secure_netflix_id = cs.get("SecureNetflixId"),
-        nfvdid            = cs.get("nfvdid"),
-        optanon_consent   = cs.get("OptanonConsent"),
-        is_valid          = True,
-        last_checked_at   = datetime.utcnow(),
-    )
-    db.session.add(entry)
-    db.session.commit()
+        # Verify the cookie is actually valid
+        if not verify_web_cookies(cs):
+            return jsonify({"status": "invalid"})
 
-    return jsonify({"status": "added"})
+        entry = CookiePool(
+            service           = "netflix",
+            netflix_id        = netflix_id,
+            secure_netflix_id = cs.get("SecureNetflixId"),
+            nfvdid            = cs.get("nfvdid"),
+            optanon_consent   = cs.get("OptanonConsent"),
+            is_valid          = True,
+            last_checked_at   = datetime.utcnow(),
+        )
+        db.session.add(entry)
+        db.session.commit()
+
+        return jsonify({"status": "added"})
 
 
 @app.route("/api/admin/clean-cookies", methods=["POST"])

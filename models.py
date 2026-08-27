@@ -59,15 +59,22 @@ class CookiePool(db.Model):
     keys = db.relationship("Key", backref="cookie", lazy=True)
 
     def to_cookie_dict(self):
-        """Return as dict compatible with generate_nftoken()."""
-        d = {"NetflixId": self.netflix_id}
-        if self.secure_netflix_id:
-            d["SecureNetflixId"] = self.secure_netflix_id
-        if self.nfvdid:
-            d["nfvdid"] = self.nfvdid
-        if self.optanon_consent:
-            d["OptanonConsent"] = self.optanon_consent
-        return d
+        """Return as dict compatible with generate_nftoken() or spotify functions."""
+        svc = self.service or "netflix"
+        if svc == "spotify":
+            d = {"sp_dc": self.sp_dc}
+            if self.sp_t: d["sp_t"] = self.sp_t
+            if self.sp_key: d["sp_key"] = self.sp_key
+            return d
+        else:
+            d = {"NetflixId": self.netflix_id}
+            if self.secure_netflix_id:
+                d["SecureNetflixId"] = self.secure_netflix_id
+            if self.nfvdid:
+                d["nfvdid"] = self.nfvdid
+            if self.optanon_consent:
+                d["OptanonConsent"] = self.optanon_consent
+            return d
 
 
 class Key(db.Model):
