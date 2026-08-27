@@ -142,7 +142,7 @@ def get_valid_cookie_for_key(key: Key):
         Key.cookie_id.isnot(None),
         Key.id != key.id,
         Key.is_revoked == False,
-    ).subquery()
+    )
 
     fresh = CookiePool.query.filter(
         CookiePool.is_valid == True,
