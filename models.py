@@ -128,7 +128,7 @@ def generate_key_code() -> str:
     return f"KAIRO-{'-'.join(parts)}"
 
 
-def get_valid_cookie_for_key(key: Key) -> CookiePool | None:
+def get_valid_cookie_for_key(key: Key):
     """
     Return a valid cookie for this key.
     If the current cookie is invalid/missing, rotate to a fresh one from the pool.
