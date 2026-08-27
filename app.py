@@ -511,40 +511,48 @@ def api_me():
 @app.route("/api/redeem", methods=["POST"])
 @login_required
 def api_redeem():
-    data     = request.get_json(silent=True) or {}
-    key_code = (data.get("key") or "").strip().upper()
+    try:
+        data     = request.get_json(silent=True) or {}
+        key_code = (data.get("key") or "").strip().upper()
 
-    if not key_code:
-        return jsonify({"error": "Inserisci una key."}), 400
+        if not key_code:
+            return jsonify({"error": "Inserisci una key."}), 400
 
-    key = Key.query.filter_by(key_code=key_code).first()
+        key = Key.query.filter_by(key_code=key_code).first()
 
-    if not key:
-        return jsonify({"error": "Key non trovata."}), 404
-    if key.is_revoked:
-        return jsonify({"error": "Key revocata."}), 400
-    if key.redeemed_by_id is not None:
-        if key.redeemed_by_id == current_user.id:
-            return jsonify({"error": "Hai già riscattato questa key.", "already_yours": True}), 400
-        return jsonify({"error": "Key già utilizzata da un altro utente."}), 400
+        if not key:
+            return jsonify({"error": "Key non trovata."}), 404
+        if key.is_revoked:
+            return jsonify({"error": "Key revocata."}), 400
+        if key.redeemed_by_id is not None:
+            if key.redeemed_by_id == current_user.id:
+                return jsonify({"error": "Hai già riscattato questa key.", "already_yours": True}), 400
+            return jsonify({"error": "Key già utilizzata da un altro utente."}), 400
 
-    # Assign a valid cookie from the pool matching the service, if available
-    cookie = get_valid_cookie_for_key(key)
-    # RIMOSSO: il blocco if not cookie: return error 503
-    # L'utente può riscattare la key, apparirà nella sua dashboard e si metterà in coda finché non carichi nuovi cookie.
+        # Assign a valid cookie from the pool matching the service, if available
+        cookie = get_valid_cookie_for_key(key)
 
-    key.redeemed_by_id = current_user.id
-    key.redeemed_at    = datetime.utcnow()
-    db.session.commit()
+        key.redeemed_by_id = current_user.id
+        key.redeemed_at    = datetime.utcnow()
+        db.session.commit()
 
-    return jsonify({"success": True})
+        return jsonify({"success": True})
+    except Exception as e:
+        import traceback
+        db.session.rollback()
+        return jsonify({"error": "CRASH REDEEM: " + str(e), "trace": traceback.format_exc()}), 500
 
 
 @app.route("/api/my-keys")
 @login_required
 def api_my_keys():
-    keys = Key.query.filter_by(redeemed_by_id=current_user.id, is_revoked=False).all()
-    return jsonify([k.to_dict() for k in keys])
+    try:
+        keys = Key.query.filter_by(redeemed_by_id=current_user.id, is_revoked=False).all()
+        return jsonify([k.to_dict() for k in keys])
+    except Exception as e:
+        import traceback
+        err_msg = str(e) + "\n" + traceback.format_exc()
+        return jsonify({"error": "CRASH INTERNO: " + str(e), "trace": err_msg}), 500
 
 
 @app.route("/api/generate-link", methods=["POST"])

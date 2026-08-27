@@ -21,7 +21,13 @@ async function loadKeys() {
   const emptyState = document.getElementById('emptyState');
   
   const response = await fetch('/api/my-keys');
-  if (!response.ok) return;
+  if (!response.ok) {
+    const errData = await response.json().catch(()=>({}));
+    const errMsg = errData.error || 'Server error loading keys';
+    emptyState.classList.remove('hidden');
+    emptyState.innerHTML = `<p style="color:var(--error); font-size:1.2rem; font-weight:bold;">${errMsg}</p>`;
+    return;
+  }
   const keys = await response.json();
   
   if (keys.length === 0) {
