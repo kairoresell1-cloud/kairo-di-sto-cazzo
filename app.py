@@ -528,10 +528,10 @@ def api_redeem():
             return jsonify({"error": "Hai già riscattato questa key.", "already_yours": True}), 400
         return jsonify({"error": "Key già utilizzata da un altro utente."}), 400
 
-    # Assign a valid cookie from the pool matching the service
+    # Assign a valid cookie from the pool matching the service, if available
     cookie = get_valid_cookie_for_key(key)
-    if not cookie:
-        return jsonify({"error": "Nessun account disponibile al momento. Riprova tra poco."}), 503
+    # RIMOSSO: il blocco if not cookie: return error 503
+    # L'utente può riscattare la key, apparirà nella sua dashboard e si metterà in coda finché non carichi nuovi cookie.
 
     key.redeemed_by_id = current_user.id
     key.redeemed_at    = datetime.utcnow()
