@@ -28,9 +28,17 @@ async function loadKeys() {
     emptyState.innerHTML = `<p style="color:var(--error); font-size:1.2rem; font-weight:bold;">${errMsg}</p>`;
     return;
   }
+  
   const keys = await response.json();
   
+  // FORCE DEBUG TO SCREEN
+  document.getElementById('welcomeMsg').innerHTML = `DEBUG: response ok, keys length = ${keys.length}`;
   if (keys.length === 0) {
+    emptyState.classList.remove('hidden');
+    keysGrid.classList.add('hidden');
+    return;
+  }
+
     emptyState.classList.remove('hidden');
     keysGrid.classList.add('hidden');
     return;
