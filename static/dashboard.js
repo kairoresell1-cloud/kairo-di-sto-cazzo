@@ -33,42 +33,16 @@ async function loadKeys() {
   emptyState.classList.add('hidden');
   keysGrid.classList.remove('hidden');
   
-  keysGrid.innerHTML = keys.map(k => {
-    const svc = k.service || 'netflix';
-    const isSpot = svc === 'spotify';
-    const svcBadge = isSpot
-      ? `<span class="badge-spotify" style="font-size:0.7rem; color:#1DB954; font-weight:bold;">?? Spotify</span>`
-      : `<span class="badge-netflix" style="font-size:0.7rem; color:#e50914; font-weight:bold;">?? Netflix</span>`;
-    const accentColor   = isSpot ? '#1DB954' : 'rgba(229,9,20,0.3)';
-    
-    let buttonRow = '';
-    if (isSpot) {
-      buttonRow = `
-        <button class="btn btn-primary" style="width:100%; padding:0.75rem; font-size:0.9rem; font-weight:700; display:flex; align-items:center; justify-content:center; gap:8px; box-shadow: 0 4px 15px rgba(29,185,84,0.4); background:rgba(29,185,84,0.15); border-color:#1DB954; color:#1DB954;" onclick="generateLink(${k.id}, 'spotify', this)">
-          ?? GENERA LINK SPOTIFY
-        </button>
-      `;
-    } else {
-      buttonRow = `
-        <button class="btn btn-primary" style="width:100%; padding:0.75rem; font-size:0.9rem; font-weight:700; display:flex; align-items:center; justify-content:center; gap:8px; box-shadow: 0 4px 15px rgba(229,9,20,0.4);" onclick="generateLink(${k.id}, 'netflix', this)">
-          ? GENERA LINK NETFLIX
-        </button>
-      `;
-    }
-    
-    return `
+  keysGrid.innerHTML = keys.map(k => `
     <div class="ticket-card" id="key-card-${k.id}">
       <div class="ticket-header">
         <div style="display:flex; justify-content:space-between; align-items:center; transform: translateZ(40px);">
           <h3 style="letter-spacing:1.5px; font-weight:700; color:var(--text-color); cursor:pointer;" onclick="toggleKey(${k.id}, '${k.key_code}')" id="key-display-${k.id}">
             ${maskKey(k.key_code)}
           </h3>
-          <div style="display:flex; gap:6px; align-items:center;">
-            ${svcBadge}
-            <div class="badge ${k.cookie_valid ? 'badge-success' : 'badge-error'}">
+          <div class="badge ${k.cookie_valid ? 'badge-success' : 'badge-error'}">
             <div class="dot ${k.cookie_valid ? 'green' : 'red'}"></div>
             ${k.cookie_valid ? 'Live' : 'Checking'}
-          </div>
           </div>
         </div>
       </div>
@@ -84,12 +58,11 @@ async function loadKeys() {
           </button>
         </div>
         
-        <div id="link-container-${k.id}" class="hidden" style="background:rgba(0,0,0,0.6); padding:1rem; border-radius:8px; border:1px solid ${accentColor}; font-size:0.85rem; position:relative; transform: translateZ(40px);">
+        <div id="link-container-${k.id}" class="hidden" style="background:rgba(0,0,0,0.6); padding:1rem; border-radius:8px; border:1px solid rgba(229,9,20,0.3); font-size:0.85rem; position:relative; transform: translateZ(40px);">
         </div>
       </div>
     </div>
-  `;
-    }).join('');
+  `).join('');
   
   // Inizializza l'effetto 3D Glass
   if (window.VanillaTilt) {
@@ -118,7 +91,7 @@ window.toggleKey = function(id, fullKey) {
   }
 }
 
-window.generateLink = async function(id, svc, btnElem) {
+window.generateLink = async function(id, btnElem) {
   const originalHtml = btnElem ? btnElem.innerHTML : '';
   if (btnElem) {
     btnElem.disabled = true;
